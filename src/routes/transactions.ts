@@ -1,22 +1,22 @@
-import { Elysia, t } from 'elysia';
-import { db } from '../db';
-import { transactions, transactionItems, products } from '../db/schema';
-import { eq, inArray, sql, desc } from 'drizzle-orm';
-import { TransactionCreate, TransactionRead } from '../types';
+import { Elysia, t } from "elysia";
+import { db, pool } from "../db";
+import { transactions, transactionItems, products } from "../db/schema";
+import { eq, inArray, sql, desc } from "drizzle-orm";
+import { TransactionCreate, TransactionRead } from "../types";
 
-export const transactionsRouter = new Elysia({ prefix: '/transactions' })
+export const transactionsRouter = new Elysia({ prefix: "/transactions" })
   .model({
     TransactionCreate,
     TransactionRead,
   })
   .post(
-    '/',
+    "/",
     async ({ body, set }) => {
       // Load all products in single query (prevent N+1)
       const productIds = body.items.map((item) => item.product_id);
       if (productIds.length === 0) {
         set.status = 400;
-        return { error: 'Transaction must have at least one item' };
+        return { error: "Transaction must have at least one item" };
       }
 
       const productsList = await db
@@ -31,7 +31,7 @@ export const transactionsRouter = new Elysia({ prefix: '/transactions' })
       if (missingIds.length > 0) {
         set.status = 404;
         return {
-          error: `Products not found: ${missingIds.join(', ')}`,
+          error: `Products not found: ${missingIds.join(", ")}`,
         };
       }
 
@@ -130,9 +130,9 @@ export const transactionsRouter = new Elysia({ prefix: '/transactions' })
       };
     },
     {
-      body: 'TransactionCreate',
+      body: "TransactionCreate",
       response: {
-        201: 'TransactionRead',
+        201: "TransactionRead",
         400: t.Object({
           error: t.String(),
         }),
@@ -141,66 +141,137 @@ export const transactionsRouter = new Elysia({ prefix: '/transactions' })
         }),
       },
       detail: {
-        summary: 'Create a new transaction with items',
-        tags: ['transactions'],
-        description: 'Create a transaction, validate stock, deduct inventory, and calculate total',
+        summary: "Create a new transaction with items",
+        tags: ["transactions"],
+        description:
+          "Create a transaction, validate stock, deduct inventory, and calculate total",
       },
     }
   )
   .get(
-    '/',
-    async ({ query }) => {
-      const offset = query.offset ?? 0;
-      const limit = query.limit ?? 100;
+    "/",
+    async ({ query, set }) => {
+      try {
+        const offset = query.offset ?? 0;
+        const limit = query.limit ?? 100;
 
-      // First, get paginated transactions
-      const transactionsList = await db
-        .select()
-        .from(transactions)
-        .orderBy(desc(transactions.createdAt))
-        .limit(limit)
-        .offset(offset);
+        // First, get paginated transactions
+        const transactionsList = await db
+          .select()
+          .from(transactions)
+          .orderBy(desc(transactions.createdAt))
+          .limit(limit)
+          .offset(offset);
 
-      if (transactionsList.length === 0) {
-        return [];
-      }
-
-      const transactionIds = transactionsList.map((t) => t.id);
-
-      // Then, eager load items and products for those transactions (prevent N+1)
-      const itemsWithProducts = await db
-        .select({
-          item: transactionItems,
-          product: products,
-        })
-        .from(transactionItems)
-        .innerJoin(products, eq(transactionItems.productId, products.id))
-        .where(inArray(transactionItems.transactionId, transactionIds));
-
-      // Group items by transaction
-      const itemsByTransaction = new Map<number, typeof itemsWithProducts>();
-      for (const row of itemsWithProducts) {
-        const txnId = row.item.transactionId!;
-        if (!itemsByTransaction.has(txnId)) {
-          itemsByTransaction.set(txnId, []);
+        if (transactionsList.length === 0) {
+          return [];
         }
-        itemsByTransaction.get(txnId)!.push(row);
-      }
 
-      // Build response
-      return transactionsList.map((txn) => ({
-        id: txn.id,
-        total_amount: parseFloat(txn.totalAmount),
-        created_at: txn.createdAt,
-        items: (itemsByTransaction.get(txn.id) || []).map((row) => ({
-          id: row.item.id,
-          quantity: row.item.quantity,
-          price: parseFloat(row.item.price),
-          product_id: row.item.productId,
-          transaction_id: row.item.transactionId,
-          product_name: row.product.name,
-        })),
-      }));
+        const transactionIds = transactionsList
+          .map((t) => t.id)
+          .filter((id): id is number => typeof id === "number" && !isNaN(id));
+
+        // Then, eager load items and products for those transactions (prevent N+1)
+        // Mimicking Python's selectinload pattern: separate optimized queries
+        // First get all items for these transactions
+        let itemsData: (typeof transactionItems.$inferSelect)[] = [];
+
+        if (transactionIds.length > 0) {
+          // Use direct pool query to avoid Drizzle's inArray issues with nullable columns
+          // This matches the Python approach of using raw SQL when needed
+          const placeholders = transactionIds
+            .map((_, i) => `$${i + 1}`)
+            .join(", ");
+          const query = `
+            SELECT id, transaction_id, product_id, quantity, price
+            FROM transactionitem
+            WHERE transaction_id IS NOT NULL
+            AND transaction_id IN (${placeholders})
+            ORDER BY transaction_id, id
+          `;
+
+          const result = await pool.query(query, transactionIds);
+
+          // Map the result to match our schema structure
+          itemsData = result.rows.map((row: any) => ({
+            id: row.id,
+            transactionId: row.transaction_id,
+            productId: row.product_id,
+            quantity: row.quantity,
+            price: row.price,
+          })) as (typeof transactionItems.$inferSelect)[];
+        }
+
+        if (itemsData.length === 0) {
+          // No items found, return transactions with empty items arrays
+          return transactionsList.map((txn) => ({
+            id: txn.id,
+            total_amount: parseFloat(txn.totalAmount),
+            created_at: txn.createdAt,
+            items: [],
+          }));
+        }
+
+        // Get all unique product IDs from items
+        const productIds = [
+          ...new Set(itemsData.map((item) => item.productId)),
+        ];
+
+        // Get all products in one query (like Python's selectinload)
+        const productsData = await db
+          .select()
+          .from(products)
+          .where(inArray(products.id, productIds));
+
+        // Create product lookup map
+        const productMap = new Map(productsData.map((p) => [p.id, p]));
+
+        // Build items with product names (mimicking Python's approach)
+        const itemsWithProducts = itemsData.map((item) => {
+          const product = productMap.get(item.productId);
+          return {
+            id: item.id,
+            quantity: item.quantity,
+            price: item.price,
+            product_id: item.productId,
+            transaction_id: item.transactionId,
+            product_name: product?.name || "",
+          };
+        });
+
+        // Group items by transaction (mimicking Python's approach)
+        const itemsByTransaction = new Map<number, typeof itemsWithProducts>();
+        for (const item of itemsWithProducts) {
+          if (item.transaction_id !== null) {
+            const txnId = item.transaction_id;
+            if (!itemsByTransaction.has(txnId)) {
+              itemsByTransaction.set(txnId, []);
+            }
+            itemsByTransaction.get(txnId)!.push(item);
+          }
+        }
+
+        // Build response (matching Python's TransactionRead structure)
+        return transactionsList.map((txn) => ({
+          id: txn.id,
+          total_amount: parseFloat(txn.totalAmount),
+          created_at: txn.createdAt,
+          items: (itemsByTransaction.get(txn.id) || []).map((item) => ({
+            id: item.id,
+            quantity: item.quantity,
+            price: parseFloat(item.price),
+            product_id: item.product_id,
+            transaction_id: item.transaction_id,
+            product_name: item.product_name,
+          })),
+        }));
+      } catch (error) {
+        set.status = 500;
+        return {
+          error: "Internal server error",
+          details: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
     {
       query: t.Object({
@@ -209,53 +280,60 @@ export const transactionsRouter = new Elysia({ prefix: '/transactions' })
       }),
       response: {
         200: t.Array(TransactionRead),
+        500: t.Object({
+          error: t.String(),
+          details: t.String(),
+        }),
       },
       detail: {
-        summary: 'Get a list of transactions',
-        tags: ['transactions'],
-        description: 'Get a paginated list of transactions with items and product names',
+        summary: "Get a list of transactions",
+        tags: ["transactions"],
+        description:
+          "Get a paginated list of transactions with items and product names",
       },
     }
   )
   .get(
-    '/:id',
+    "/:id",
     async ({ params, set }) => {
-      // Eager load transaction with items and products (prevent N+1)
-      const transactionData = await db
-        .select({
-          transaction: transactions,
-          item: transactionItems,
-          product: products,
-        })
+      // First, get the transaction
+      const [transaction] = await db
+        .select()
         .from(transactions)
-        .leftJoin(transactionItems, eq(transactions.id, transactionItems.transactionId))
-        .leftJoin(products, eq(transactionItems.productId, products.id))
-        .where(eq(transactions.id, params.id));
+        .where(eq(transactions.id, params.id))
+        .limit(1);
 
-      if (transactionData.length === 0) {
+      if (!transaction) {
         set.status = 404;
-        return { error: 'Transaction not found' };
+        return { error: "Transaction not found" };
       }
 
-      const firstRow = transactionData[0];
-      const transaction = firstRow.transaction;
-
-      const items = transactionData
-        .filter((row) => row.item && row.product)
-        .map((row) => ({
-          id: row.item!.id,
-          quantity: row.item!.quantity,
-          price: parseFloat(row.item!.price),
-          product_id: row.item!.productId,
-          transaction_id: row.item!.transactionId,
-          product_name: row.product!.name,
-        }));
+      // Then, eager load items and products (prevent N+1)
+      const itemsData = await db
+        .select({
+          id: transactionItems.id,
+          quantity: transactionItems.quantity,
+          price: transactionItems.price,
+          product_id: transactionItems.productId,
+          transaction_id: transactionItems.transactionId,
+          product_name: products.name,
+        })
+        .from(transactionItems)
+        .innerJoin(products, eq(transactionItems.productId, products.id))
+        .where(eq(transactionItems.transactionId, params.id));
 
       return {
         id: transaction.id,
         total_amount: parseFloat(transaction.totalAmount),
         created_at: transaction.createdAt,
-        items,
+        items: itemsData.map((item) => ({
+          id: item.id,
+          quantity: item.quantity,
+          price: parseFloat(item.price),
+          product_id: item.product_id,
+          transaction_id: item.transaction_id,
+          product_name: item.product_name,
+        })),
       };
     },
     {
@@ -263,16 +341,15 @@ export const transactionsRouter = new Elysia({ prefix: '/transactions' })
         id: t.Number(),
       }),
       response: {
-        200: 'TransactionRead',
+        200: "TransactionRead",
         404: t.Object({
           error: t.String(),
         }),
       },
       detail: {
-        summary: 'Get a single transaction by ID',
-        tags: ['transactions'],
-        description: 'Get transaction details with items and product names',
+        summary: "Get a single transaction by ID",
+        tags: ["transactions"],
+        description: "Get transaction details with items and product names",
       },
     }
   );
-
