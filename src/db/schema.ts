@@ -13,8 +13,11 @@ export const products = pgTable("product", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  cogs: decimal("cogs", { precision: 10, scale: 2 }).notNull(),
   description: varchar("description", { length: 1000 }),
   stock: integer("stock").notNull().default(0),
+  bundleQuantity: integer("bundle_quantity"),
+  bundlePrice: decimal("bundle_price", { precision: 10, scale: 2 }),
 });
 
 // Transaction table
@@ -33,6 +36,16 @@ export const transactionItems = pgTable("transactionitem", {
     .references(() => products.id),
   quantity: integer("quantity").notNull(),
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+});
+
+// Discount table
+export const discounts = pgTable("discount", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  code: varchar("code", { length: 50 }).notNull().unique(),
+  type: varchar("type", { length: 20 }).notNull(), // 'individual_item' or 'for_all_item'
+  percentage: decimal("percentage", { precision: 5, scale: 2 }).notNull(),
+  productId: integer("product_id").references(() => products.id), // Required when type is 'individual_item'
 });
 
 // Relations

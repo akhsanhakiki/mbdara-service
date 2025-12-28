@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { db, pool } from "../db";
-import { transactions, transactionItems, products } from "../db/schema";
+import { transactions, transactionItems, products, discounts } from "../db/schema";
 import { eq, inArray, sql, desc } from "drizzle-orm";
 import { TransactionCreate, TransactionRead } from "../types";
 
@@ -35,6 +35,25 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         };
       }
 
+      // Validate and fetch discount if code provided
+      let discount = null;
+      if (body.discount_code) {
+        const [discountData] = await db
+          .select()
+          .from(discounts)
+          .where(eq(discounts.code, body.discount_code))
+          .limit(1);
+
+        if (!discountData) {
+          set.status = 404;
+          return {
+            error: `Discount code '${body.discount_code}' not found`,
+          };
+        }
+
+        discount = discountData;
+      }
+
       // Validate stock and calculate total
       let totalAmount = 0;
       const itemsToCreate: Array<{
@@ -53,15 +72,56 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           };
         }
 
-        // Calculate item price total
-        const itemTotal = parseFloat(product.price) * item.quantity;
+        // Calculate item price total with bundle pricing
+        let itemTotal = 0;
+        const individualPrice = parseFloat(product.price);
+        const bundleQuantity = product.bundleQuantity;
+        const bundlePrice = product.bundlePrice
+          ? parseFloat(product.bundlePrice)
+          : null;
+
+        // Check if product has bundle pricing and quantity qualifies
+        if (
+          bundleQuantity !== null &&
+          bundlePrice !== null &&
+          item.quantity >= bundleQuantity
+        ) {
+          // Calculate bundles and remaining items
+          const bundles = Math.floor(item.quantity / bundleQuantity);
+          const remaining = item.quantity % bundleQuantity;
+
+          // Bundle total + individual total for remaining items
+          itemTotal = bundles * bundlePrice + remaining * individualPrice;
+        } else {
+          // Use regular pricing
+          itemTotal = individualPrice * item.quantity;
+        }
+
+        // Apply discount if type is individual_item AND product matches
+        if (
+          discount &&
+          discount.type === "individual_item" &&
+          discount.productId !== null &&
+          discount.productId === product.id
+        ) {
+          const discountAmount = itemTotal * (parseFloat(discount.percentage) / 100);
+          itemTotal = itemTotal - discountAmount;
+        }
+
         totalAmount += itemTotal;
 
+        // Store the calculated total price (not per-unit price)
         itemsToCreate.push({
           productId: product.id,
           quantity: item.quantity,
-          price: product.price,
+          price: itemTotal.toString(),
         });
+      }
+
+      // Apply discount if type is for_all_item
+      if (discount && discount.type === "for_all_item") {
+        const discountAmount = totalAmount * (parseFloat(discount.percentage) / 100);
+        totalAmount = totalAmount - discountAmount;
       }
 
       // Create transaction and items in a single database transaction
