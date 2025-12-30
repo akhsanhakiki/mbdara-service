@@ -151,6 +151,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             createdAt: body.created_at || new Date(),
             discount: body.discount_code || null,
             profit: Math.round(profit).toString(),
+            paymentMethod: body.payment_method || null,
           })
           .returning();
 
@@ -202,6 +203,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         profit: result.transaction.profit
           ? parseFloat(result.transaction.profit)
           : null,
+        payment_method: result.transaction.paymentMethod,
         items: result.items.map((item) => ({
           id: item.id,
           quantity: item.quantity,
@@ -293,6 +295,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             created_at: txn.createdAt,
             discount: txn.discount,
             profit: txn.profit ? parseFloat(txn.profit) : null,
+            payment_method: txn.paymentMethod,
             items: [],
           }));
         }
@@ -343,6 +346,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           created_at: txn.createdAt,
           discount: txn.discount,
           profit: txn.profit ? parseFloat(txn.profit) : null,
+          payment_method: txn.paymentMethod,
           items: (itemsByTransaction.get(txn.id) || []).map((item) => ({
             id: item.id,
             quantity: item.quantity,
@@ -415,6 +419,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         created_at: transaction.createdAt,
         discount: transaction.discount,
         profit: transaction.profit ? parseFloat(transaction.profit) : null,
+        payment_method: transaction.paymentMethod,
         items: itemsData.map((item) => ({
           id: item.id,
           quantity: item.quantity,

@@ -52,6 +52,7 @@ export const TransactionCreate = t.Object({
   items: t.Array(TransactionItemCreate),
   created_at: t.Optional(t.Date()),
   discount_code: t.Optional(t.String()),
+  payment_method: t.Optional(t.String()),
 });
 
 export const TransactionRead = t.Object({
@@ -60,6 +61,7 @@ export const TransactionRead = t.Object({
   created_at: t.Date(),
   discount: t.Nullable(t.String()),
   profit: t.Nullable(t.Number()),
+  payment_method: t.Nullable(t.String()),
   items: t.Array(TransactionItemRead),
 });
 

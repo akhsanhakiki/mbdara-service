@@ -27,6 +27,7 @@ export const transactions = pgTable("transaction", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   discount: varchar("discount", { length: 50 }),
   profit: decimal("profit", { precision: 10, scale: 0 }),
+  paymentMethod: varchar("payment_method", { length: 50 }),
 });
 
 // TransactionItem table
