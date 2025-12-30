@@ -40,14 +40,14 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         .values({
           name: body.name,
           price: body.price.toString(),
-          cogs: body.cogs.toString(),
+          cogs: Math.round(body.cogs).toString(),
           description: body.description || null,
           stock: body.stock ?? 0,
           bundleQuantity:
             body.bundle_quantity !== undefined ? body.bundle_quantity : null,
           bundlePrice:
             body.bundle_price !== undefined
-              ? body.bundle_price.toString()
+              ? Math.round(body.bundle_price).toString()
               : null,
         })
         .returning();
@@ -218,7 +218,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
 
       if (body.name !== undefined) updateData.name = body.name;
       if (body.price !== undefined) updateData.price = body.price.toString();
-      if (body.cogs !== undefined) updateData.cogs = body.cogs.toString();
+      if (body.cogs !== undefined) updateData.cogs = Math.round(body.cogs).toString();
       if (body.description !== undefined)
         updateData.description = body.description || null;
       if (body.stock !== undefined) updateData.stock = body.stock;
@@ -227,7 +227,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       }
       if (body.bundle_price !== undefined) {
         updateData.bundlePrice =
-          body.bundle_price !== null ? body.bundle_price.toString() : null;
+          body.bundle_price !== null ? Math.round(body.bundle_price).toString() : null;
       }
 
       const [updated] = await db

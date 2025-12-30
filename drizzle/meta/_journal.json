@@ -22,6 +22,20 @@
       "when": 1766930120019,
       "tag": "0002_silky_vision",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1767067132109,
+      "tag": "0003_vengeful_spot",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1767068708602,
+      "tag": "0004_simple_beast",
+      "breakpoints": true
     }
   ]
 }
