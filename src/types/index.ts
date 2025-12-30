@@ -59,6 +59,7 @@ export const TransactionRead = t.Object({
   total_amount: t.Number(),
   created_at: t.Date(),
   discount: t.Nullable(t.String()),
+  profit: t.Nullable(t.Number()),
   items: t.Array(TransactionItemRead),
 });
 

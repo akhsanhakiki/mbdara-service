@@ -1,6 +1,11 @@
 import { Elysia, t } from "elysia";
 import { db, pool } from "../db";
-import { transactions, transactionItems, products, discounts } from "../db/schema";
+import {
+  transactions,
+  transactionItems,
+  products,
+  discounts,
+} from "../db/schema";
 import { eq, inArray, sql, desc } from "drizzle-orm";
 import { TransactionCreate, TransactionRead } from "../types";
 
@@ -56,6 +61,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
 
       // Validate stock and calculate total
       let totalAmount = 0;
+      let totalCOGS = 0;
       const itemsToCreate: Array<{
         productId: number;
         quantity: number;
@@ -91,7 +97,9 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           const remaining = item.quantity % bundleQuantity;
 
           // Bundle total (bundles × bundleQuantity × bundlePrice per item) + individual total for remaining items
-          itemTotal = bundles * bundleQuantity * bundlePrice + remaining * individualPrice;
+          itemTotal =
+            bundles * bundleQuantity * bundlePrice +
+            remaining * individualPrice;
         } else {
           // Use regular pricing
           itemTotal = individualPrice * item.quantity;
@@ -104,11 +112,16 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           discount.productId !== null &&
           discount.productId === product.id
         ) {
-          const discountAmount = itemTotal * (parseFloat(discount.percentage) / 100);
+          const discountAmount =
+            itemTotal * (parseFloat(discount.percentage) / 100);
           itemTotal = itemTotal - discountAmount;
         }
 
         totalAmount += itemTotal;
+
+        // Calculate COGS for this item
+        const cogs = parseFloat(product.cogs);
+        totalCOGS += cogs * item.quantity;
 
         // Store the calculated total price (not per-unit price)
         itemsToCreate.push({
@@ -120,9 +133,13 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
 
       // Apply discount if type is for_all_item
       if (discount && discount.type === "for_all_item") {
-        const discountAmount = totalAmount * (parseFloat(discount.percentage) / 100);
+        const discountAmount =
+          totalAmount * (parseFloat(discount.percentage) / 100);
         totalAmount = totalAmount - discountAmount;
       }
+
+      // Calculate profit: totalAmount - totalCOGS
+      const profit = totalAmount - totalCOGS;
 
       // Create transaction and items in a single database transaction
       const result = await db.transaction(async (tx) => {
@@ -133,6 +150,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             totalAmount: totalAmount.toString(),
             createdAt: body.created_at || new Date(),
             discount: body.discount_code || null,
+            profit: Math.round(profit).toString(),
           })
           .returning();
 
@@ -181,6 +199,9 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         total_amount: parseFloat(result.transaction.totalAmount),
         created_at: result.transaction.createdAt,
         discount: result.transaction.discount,
+        profit: result.transaction.profit
+          ? parseFloat(result.transaction.profit)
+          : null,
         items: result.items.map((item) => ({
           id: item.id,
           quantity: item.quantity,
@@ -271,6 +292,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             total_amount: parseFloat(txn.totalAmount),
             created_at: txn.createdAt,
             discount: txn.discount,
+            profit: txn.profit ? parseFloat(txn.profit) : null,
             items: [],
           }));
         }
@@ -320,6 +342,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           total_amount: parseFloat(txn.totalAmount),
           created_at: txn.createdAt,
           discount: txn.discount,
+          profit: txn.profit ? parseFloat(txn.profit) : null,
           items: (itemsByTransaction.get(txn.id) || []).map((item) => ({
             id: item.id,
             quantity: item.quantity,
@@ -391,10 +414,11 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         total_amount: parseFloat(transaction.totalAmount),
         created_at: transaction.createdAt,
         discount: transaction.discount,
+        profit: transaction.profit ? parseFloat(transaction.profit) : null,
         items: itemsData.map((item) => ({
           id: item.id,
           quantity: item.quantity,
-          price: parseFloat(item.price),
+          price: parseFloat(item.price) / item.quantity,
           product_id: item.product_id,
           transaction_id: item.transaction_id,
           product_name: item.product_name,

@@ -26,6 +26,7 @@ export const transactions = pgTable("transaction", {
   totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   discount: varchar("discount", { length: 50 }),
+  profit: decimal("profit", { precision: 10, scale: 0 }),
 });
 
 // TransactionItem table
