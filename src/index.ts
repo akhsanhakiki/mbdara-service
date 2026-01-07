@@ -3,6 +3,7 @@ import { openapi } from "@elysiajs/openapi";
 import { productsRouter } from "./routes/products";
 import { transactionsRouter } from "./routes/transactions";
 import { discountsRouter } from "./routes/discounts";
+import { expensesRouter } from "./routes/expenses";
 
 const app = new Elysia()
   .onRequest(({ request, set }) => {
@@ -60,6 +61,10 @@ const app = new Elysia()
             name: "discounts",
             description: "Discount management endpoints",
           },
+          {
+            name: "expenses",
+            description: "Expense management endpoints",
+          },
         ],
       },
     })
@@ -74,6 +79,7 @@ const app = new Elysia()
   .use(productsRouter)
   .use(transactionsRouter)
   .use(discountsRouter)
+  .use(expensesRouter)
   .listen(process.env.PORT ? parseInt(process.env.PORT) : 3000);
 
 console.log(

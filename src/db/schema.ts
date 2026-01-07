@@ -51,6 +51,16 @@ export const discounts = pgTable("discount", {
   productId: integer("product_id").references(() => products.id), // Required when type is 'individual_item'
 });
 
+// Expense table
+export const expenses = pgTable("expense", {
+  id: serial("id").primaryKey(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  description: varchar("description", { length: 1000 }),
+  date: timestamp("date").notNull().defaultNow(),
+  category: varchar("category", { length: 255 }),
+  paymentMethod: varchar("payment_method", { length: 50 }),
+});
+
 // Relations
 export const productsRelations = relations(products, ({ many }) => ({
   transactionItems: many(transactionItems),

@@ -92,3 +92,29 @@ export const DiscountUpdate = t.Object({
   percentage: t.Optional(t.Number({ minimum: 0, maximum: 100 })),
   product_id: t.Optional(t.Number()),
 });
+
+// Expense schemas
+export const ExpenseCreate = t.Object({
+  amount: t.Number({ minimum: 0 }),
+  description: t.Optional(t.String()),
+  date: t.Optional(t.Date()),
+  category: t.Optional(t.String()),
+  payment_method: t.Optional(t.String()),
+});
+
+export const ExpenseRead = t.Object({
+  id: t.Number(),
+  amount: t.Number(),
+  description: t.Nullable(t.String()),
+  date: t.Date(),
+  category: t.Nullable(t.String()),
+  payment_method: t.Nullable(t.String()),
+});
+
+export const ExpenseUpdate = t.Object({
+  amount: t.Optional(t.Number({ minimum: 0 })),
+  description: t.Optional(t.String()),
+  date: t.Optional(t.Date()),
+  category: t.Optional(t.String()),
+  payment_method: t.Optional(t.String()),
+});

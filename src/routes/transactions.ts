@@ -6,7 +6,7 @@ import {
   products,
   discounts,
 } from "../db/schema";
-import { eq, inArray, sql, desc } from "drizzle-orm";
+import { eq, inArray, sql, desc, and, gte, lte } from "drizzle-orm";
 import { TransactionCreate, TransactionRead } from "../types";
 
 export const transactionsRouter = new Elysia({ prefix: "/transactions" })
@@ -240,13 +240,50 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         const offset = query.offset ?? 0;
         const limit = query.limit ?? 100;
 
-        // First, get paginated transactions
-        const transactionsList = await db
+        // Build where conditions for date range filtering
+        const conditions = [];
+
+        // Date range conditions
+        if (query.start_date) {
+          const startDate = new Date(query.start_date);
+          if (isNaN(startDate.getTime())) {
+            set.status = 400;
+            return { error: "Invalid start_date format. Use ISO 8601 format (e.g., 2026-01-01T00:00:00Z)" };
+          }
+          conditions.push(gte(transactions.createdAt, startDate));
+        }
+
+        if (query.end_date) {
+          const endDate = new Date(query.end_date);
+          if (isNaN(endDate.getTime())) {
+            set.status = 400;
+            return { error: "Invalid end_date format. Use ISO 8601 format (e.g., 2026-01-31T23:59:59Z)" };
+          }
+          conditions.push(lte(transactions.createdAt, endDate));
+        }
+
+        // Validate date range
+        if (query.start_date && query.end_date) {
+          const startDate = new Date(query.start_date);
+          const endDate = new Date(query.end_date);
+          if (startDate > endDate) {
+            set.status = 400;
+            return { error: "start_date must be before or equal to end_date" };
+          }
+        }
+
+        // First, get paginated transactions with date filtering
+        const baseQuery = db
           .select()
           .from(transactions)
-          .orderBy(desc(transactions.createdAt))
-          .limit(limit)
-          .offset(offset);
+          .orderBy(desc(transactions.createdAt));
+
+        const transactionsList = conditions.length > 0
+          ? await baseQuery
+              .where(conditions.length === 1 ? conditions[0] : and(...conditions))
+              .limit(limit)
+              .offset(offset)
+          : await baseQuery.limit(limit).offset(offset);
 
         if (transactionsList.length === 0) {
           return [];
@@ -368,9 +405,14 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
       query: t.Object({
         offset: t.Optional(t.Number({ default: 0 })),
         limit: t.Optional(t.Number({ default: 100 })),
+        start_date: t.Optional(t.String()),
+        end_date: t.Optional(t.String()),
       }),
       response: {
         200: t.Array(TransactionRead),
+        400: t.Object({
+          error: t.String(),
+        }),
         500: t.Object({
           error: t.String(),
           details: t.String(),
@@ -380,7 +422,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         summary: "Get a list of transactions",
         tags: ["transactions"],
         description:
-          "Get a paginated list of transactions with items and product names",
+          "Get a paginated list of transactions with items and product names, with optional date range filtering",
       },
     }
   )
