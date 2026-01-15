@@ -118,3 +118,28 @@ export const ExpenseUpdate = t.Object({
   category: t.Optional(t.String()),
   payment_method: t.Optional(t.String()),
 });
+
+// Summary schemas
+export const ChartDataPoint = t.Object({
+  date: t.Date(),
+  revenue: t.Number(),
+  profit: t.Number(),
+  expenses: t.Number(),
+});
+
+export const ProductPerformance = t.Object({
+  product_id: t.Number(),
+  product_name: t.String(),
+  total_revenue: t.Number(),
+  quantity_sold: t.Number(),
+});
+
+export const SummaryResponse = t.Object({
+  total_revenue: t.Number(),
+  total_profit: t.Number(),
+  average_transaction: t.Number(),
+  total_expenses: t.Number(),
+  chart_data: t.Array(ChartDataPoint),
+  top_5_products: t.Array(ProductPerformance),
+  underperforming_products: t.Array(ProductPerformance),
+});
