@@ -5,6 +5,7 @@ import { transactionsRouter } from "./routes/transactions";
 import { discountsRouter } from "./routes/discounts";
 import { expensesRouter } from "./routes/expenses";
 import { summaryRouter } from "./routes/summary";
+import { usersRouter } from "./routes/users";
 
 const app = new Elysia()
   .onRequest(({ request, set }) => {
@@ -70,6 +71,10 @@ const app = new Elysia()
             name: "summary",
             description: "Summary statistics and analytics endpoints",
           },
+          {
+            name: "users",
+            description: "User management endpoints",
+          },
         ],
       },
     })
@@ -86,6 +91,7 @@ const app = new Elysia()
   .use(discountsRouter)
   .use(expensesRouter)
   .use(summaryRouter)
+  .use(usersRouter)
   .listen(process.env.PORT ? parseInt(process.env.PORT) : 3000);
 
 console.log(

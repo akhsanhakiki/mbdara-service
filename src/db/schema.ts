@@ -1,7 +1,11 @@
 import {
   pgTable,
+  pgSchema,
   serial,
   varchar,
+  text,
+  uuid,
+  boolean,
   decimal,
   integer,
   timestamp,
@@ -83,3 +87,22 @@ export const transactionItemsRelations = relations(
     }),
   })
 );
+
+// Neon Auth schema - user table from neon_auth schema
+export const neonAuthSchema = pgSchema("neon_auth");
+
+export const user = neonAuthSchema.table("user", {
+  id: uuid("id").primaryKey(),
+  name: text("name"),
+  email: text("email").notNull(),
+  emailVerified: boolean("emailVerified"), // Keep camelCase as shown in UI
+  image: text("image"),
+});
+
+// Member table - likely contains role information
+// Note: If member table doesn't exist or has different structure, we'll handle it in the route
+export const member = neonAuthSchema.table("member", {
+  id: uuid("id").primaryKey(),
+  userId: uuid("user_id").references(() => user.id),
+  role: varchar("role", { length: 50 }),
+});

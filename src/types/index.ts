@@ -143,3 +143,23 @@ export const SummaryResponse = t.Object({
   top_5_products: t.Array(ProductPerformance),
   underperforming_products: t.Array(ProductPerformance),
 });
+
+// User schemas
+export const UserInvite = t.Object({
+  email: t.String({ format: "email" }),
+  name: t.Optional(t.String()),
+  role: t.Union([t.Literal("admin"), t.Literal("user")]),
+});
+
+export const UserRead = t.Object({
+  id: t.String(),
+  email: t.String(),
+  name: t.Nullable(t.String()),
+  role: t.Nullable(t.String()),
+  emailVerified: t.Nullable(t.Boolean()),
+  image: t.Nullable(t.String()),
+});
+
+export const UserRoleUpdate = t.Object({
+  role: t.Union([t.Literal("admin"), t.Literal("user")]),
+});
