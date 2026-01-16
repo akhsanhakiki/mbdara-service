@@ -99,10 +99,21 @@ export const user = neonAuthSchema.table("user", {
   image: text("image"),
 });
 
-// Member table - likely contains role information
-// Note: If member table doesn't exist or has different structure, we'll handle it in the route
+// Organization table
+export const organization = neonAuthSchema.table("organization", {
+  id: uuid("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  logo: text("logo"),
+  createdAt: timestamp("createdAt", { withTimezone: true }).notNull().defaultNow(),
+  metadata: text("metadata"),
+});
+
+// Member table - links users to organizations
 export const member = neonAuthSchema.table("member", {
   id: uuid("id").primaryKey(),
-  userId: uuid("user_id").references(() => user.id),
-  role: varchar("role", { length: 50 }),
+  organizationId: uuid("organizationId").notNull().references(() => organization.id, { onDelete: "cascade" }),
+  userId: uuid("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
+  role: varchar("role", { length: 50 }).notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -6,6 +6,8 @@ import { discountsRouter } from "./routes/discounts";
 import { expensesRouter } from "./routes/expenses";
 import { summaryRouter } from "./routes/summary";
 import { usersRouter } from "./routes/users";
+import { organizationsRouter } from "./routes/organizations";
+import { membersRouter } from "./routes/members";
 
 const app = new Elysia()
   .onRequest(({ request, set }) => {
@@ -75,6 +77,14 @@ const app = new Elysia()
             name: "users",
             description: "User management endpoints",
           },
+          {
+            name: "organizations",
+            description: "Organization management endpoints",
+          },
+          {
+            name: "members",
+            description: "Organization member management endpoints",
+          },
         ],
       },
     })
@@ -92,6 +102,8 @@ const app = new Elysia()
   .use(expensesRouter)
   .use(summaryRouter)
   .use(usersRouter)
+  .use(organizationsRouter)
+  .use(membersRouter)
   .listen(process.env.PORT ? parseInt(process.env.PORT) : 3000);
 
 console.log(
