@@ -93,7 +93,8 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       detail: {
         summary: "Get a list of organizations",
         tags: ["organizations"],
-        description: "Get a paginated list of organizations with optional search",
+        description:
+          "Get a paginated list of organizations with optional search",
       },
     }
   )
@@ -142,7 +143,10 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
           return { error: "Organization with this slug already exists" };
         }
         set.status = 500;
-        return { error: "Failed to create organization", details: error.message };
+        return {
+          error: "Failed to create organization",
+          details: error.message,
+        };
       }
     },
     {
