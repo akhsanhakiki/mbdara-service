@@ -57,6 +57,13 @@
       "when": 1767748700029,
       "tag": "0007_greedy_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1768743876572,
+      "tag": "0008_early_lightspeed",
+      "breakpoints": true
     }
   ]
 }

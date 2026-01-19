@@ -32,6 +32,7 @@ export const transactions = pgTable("transaction", {
   discount: varchar("discount", { length: 50 }),
   profit: decimal("profit", { precision: 10, scale: 0 }),
   paymentMethod: varchar("payment_method", { length: 50 }),
+  organizationId: text("organization_id"), // UUID from neon_auth.organization
 });
 
 // TransactionItem table
@@ -116,4 +117,15 @@ export const member = neonAuthSchema.table("member", {
   userId: uuid("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
   role: varchar("role", { length: 50 }).notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Session table - for authentication and active organization
+export const session = neonAuthSchema.table("session", {
+  id: uuid("id").primaryKey(),
+  token: text("token").notNull().unique(),
+  userId: uuid("userId").notNull().references(() => user.id, { onDelete: "cascade" }),
+  activeOrganizationId: text("activeOrganizationId"),
+  expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true }).notNull(),
 });

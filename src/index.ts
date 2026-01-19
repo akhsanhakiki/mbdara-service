@@ -8,6 +8,7 @@ import { summaryRouter } from "./routes/summary";
 import { usersRouter } from "./routes/users";
 import { organizationsRouter } from "./routes/organizations";
 import { membersRouter } from "./routes/members";
+import { pool } from "./db";
 
 const app = new Elysia()
   .onRequest(({ request, set }) => {
@@ -53,13 +54,13 @@ const app = new Elysia()
           title: "MBDara API",
           version: "1.0.0",
           description:
-            "A simple cashier API for managing products and transactions",
+            "A simple cashier API for managing products and transactions. Transaction endpoints require bearer token authentication to identify the active organization.",
         },
         tags: [
           { name: "products", description: "Product management endpoints" },
           {
             name: "transactions",
-            description: "Transaction management endpoints",
+            description: "Transaction management endpoints. Requires bearer token authentication.",
           },
           {
             name: "discounts",
@@ -86,6 +87,17 @@ const app = new Elysia()
             description: "Organization member management endpoints",
           },
         ],
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              type: "http",
+              scheme: "bearer",
+              bearerFormat: "JWT",
+              description:
+                "Bearer token from session. The token is used to identify the active organization. Include it in the Authorization header as: Bearer <token>",
+            },
+          },
+        },
       },
     })
   )
@@ -95,6 +107,72 @@ const app = new Elysia()
       version: "1.0.0",
       docs: "/documentation",
     };
+  })
+  .get("/debug/session", async ({ request, set }) => {
+    // Debug endpoint to help verify token lookup
+    const authHeader = request.headers.get("authorization");
+    if (!authHeader) {
+      set.status = 400;
+      return { error: "Missing Authorization header" };
+    }
+
+    const parts = authHeader.split(" ");
+    if (parts.length !== 2 || parts[0] !== "Bearer") {
+      set.status = 400;
+      return { error: "Invalid format. Expected: Bearer <token>" };
+    }
+
+    const token = parts[1].trim();
+
+    try {
+      // Try to find the session
+      const result = await pool.query(
+        `SELECT 
+          id,
+          token,
+          "userId",
+          "activeOrganizationId",
+          "expiresAt",
+          "createdAt"
+         FROM neon_auth.session
+         WHERE token = $1
+         LIMIT 1`,
+        [token]
+      );
+
+      if (result.rows.length === 0) {
+        return {
+          token_received: token.substring(0, 20) + "...",
+          token_length: token.length,
+          found: false,
+          message: "Token not found in database. Please verify the token exists in neon_auth.session table.",
+        };
+      }
+
+      const session = result.rows[0];
+      const expiresAt = new Date(session.expiresAt);
+      const isExpired = expiresAt < new Date();
+
+      return {
+        token_received: token.substring(0, 20) + "...",
+        token_length: token.length,
+        found: true,
+        session: {
+          id: session.id,
+          userId: session.userId,
+          activeOrganizationId: session.activeOrganizationId,
+          expiresAt: session.expiresAt,
+          isExpired: isExpired,
+          hasActiveOrganization: !!session.activeOrganizationId,
+        },
+      };
+    } catch (error) {
+      set.status = 500;
+      return {
+        error: "Database error",
+        details: error instanceof Error ? error.message : String(error),
+      };
+    }
   })
   .use(productsRouter)
   .use(transactionsRouter)
