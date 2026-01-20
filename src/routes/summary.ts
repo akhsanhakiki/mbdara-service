@@ -8,6 +8,7 @@ import {
 } from "../db/schema";
 import { eq, and, gte, lte, sql, desc, asc } from "drizzle-orm";
 import { SummaryResponse } from "../types";
+import { getOrganizationIdFromHeaders } from "../utils/auth";
 
 export const summaryRouter = new Elysia({ prefix: "/summary" })
   .model({
@@ -15,11 +16,20 @@ export const summaryRouter = new Elysia({ prefix: "/summary" })
   })
   .get(
     "/",
-    async ({ query, set }) => {
+    async ({ query, set, request }) => {
       try {
+        const authResult = await getOrganizationIdFromHeaders(request.headers);
+        if (!authResult.organizationId) {
+          set.status = 401;
+          return {
+            error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+          };
+        }
+        const organizationId = authResult.organizationId;
+
         // Build date range conditions
-        const transactionConditions = [];
-        const expenseConditions = [];
+        const transactionConditions = [eq(transactions.organizationId, organizationId)];
+        const expenseConditions = [eq(expenses.organizationId, organizationId)];
 
         // Date range conditions for transactions
         if (query.start_date) {
@@ -192,6 +202,12 @@ export const summaryRouter = new Elysia({ prefix: "/summary" })
           .from(transactionItems)
           .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
           .innerJoin(products, eq(transactionItems.productId, products.id))
+          .where(
+            and(
+              eq(transactions.organizationId, organizationId),
+              eq(products.organizationId, organizationId)
+            )
+          )
           .groupBy(products.id, products.name)
           .orderBy(desc(sql`COALESCE(SUM(${transactionItems.price}::numeric), 0)::float`))
           .limit(5);
@@ -211,6 +227,12 @@ export const summaryRouter = new Elysia({ prefix: "/summary" })
           .from(transactionItems)
           .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
           .innerJoin(products, eq(transactionItems.productId, products.id))
+          .where(
+            and(
+              eq(transactions.organizationId, organizationId),
+              eq(products.organizationId, organizationId)
+            )
+          )
           .groupBy(products.id, products.name);
 
         const allProductsPerformance = transactionWhere
@@ -260,6 +282,9 @@ export const summaryRouter = new Elysia({ prefix: "/summary" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
         500: t.Object({
           error: t.String(),
           details: t.String(),
@@ -269,7 +294,8 @@ export const summaryRouter = new Elysia({ prefix: "/summary" })
         summary: "Get summary statistics with metrics, chart data, and product performance",
         tags: ["summary"],
         description:
-          "Get aggregated financial metrics (revenue, profit, expenses, average transaction), daily chart data, top 5 products by revenue, and underperforming products. Supports optional date range filtering.",
+          "Get aggregated financial metrics (revenue, profit, expenses, average transaction), daily chart data, top 5 products by revenue, and underperforming products. Supports optional date range filtering. Requires bearer token authentication and returns only data belonging to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   );

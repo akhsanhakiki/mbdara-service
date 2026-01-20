@@ -1,8 +1,9 @@
 import { Elysia, t } from "elysia";
 import { db } from "../db";
 import { discounts, products } from "../db/schema";
-import { eq, or, ilike } from "drizzle-orm";
+import { and, eq, ilike, or } from "drizzle-orm";
 import { DiscountCreate, DiscountRead, DiscountUpdate } from "../types";
+import { getOrganizationIdFromHeaders } from "../utils/auth";
 
 export const discountsRouter = new Elysia({ prefix: "/discounts" })
   .model({
@@ -12,7 +13,16 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
   })
   .post(
     "/",
-    async ({ body, set }) => {
+    async ({ body, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       // Validate: if type is individual_item, product_id is required
       if (body.type === "individual_item" && !body.product_id) {
         set.status = 400;
@@ -34,7 +44,12 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         const [product] = await db
           .select()
           .from(products)
-          .where(eq(products.id, body.product_id))
+          .where(
+            and(
+              eq(products.id, body.product_id),
+              eq(products.organizationId, organizationId)
+            )
+          )
           .limit(1);
 
         if (!product) {
@@ -47,7 +62,9 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       const [existing] = await db
         .select()
         .from(discounts)
-        .where(eq(discounts.code, body.code))
+        .where(
+          and(eq(discounts.code, body.code), eq(discounts.organizationId, organizationId))
+        )
         .limit(1);
 
       if (existing) {
@@ -63,6 +80,7 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
           type: body.type,
           percentage: body.percentage.toString(),
           productId: body.product_id || null,
+          organizationId,
         })
         .returning();
 
@@ -74,6 +92,7 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         type: discount.type,
         percentage: parseFloat(discount.percentage),
         product_id: discount.productId,
+        organization_id: discount.organizationId ?? null,
       };
     },
     {
@@ -83,28 +102,48 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
       },
       detail: {
         summary: "Create a new discount",
         tags: ["discounts"],
-        description: "Create a new discount with code, type, and percentage",
+        description:
+          "Create a new discount with code, type, and percentage. Requires bearer token authentication. The discount will be associated with the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/",
-    async ({ query }) => {
+    async ({ query, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const offset = query.offset ?? 0;
       const limit = query.limit ?? 100;
 
-      const baseQuery = db.select().from(discounts);
+      const baseQuery = db
+        .select()
+        .from(discounts)
+        .where(eq(discounts.organizationId, organizationId));
 
       const discountsList = query.search
         ? await baseQuery
             .where(
-              or(
-                ilike(discounts.name, `%${query.search}%`),
-                ilike(discounts.code, `%${query.search}%`)
+              and(
+                eq(discounts.organizationId, organizationId),
+                or(
+                  ilike(discounts.name, `%${query.search}%`),
+                  ilike(discounts.code, `%${query.search}%`)
+                )
               )
             )
             .limit(limit)
@@ -118,6 +157,7 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         type: d.type,
         percentage: parseFloat(d.percentage),
         product_id: d.productId,
+        organization_id: d.organizationId ?? null,
       }));
     },
     {
@@ -128,21 +168,35 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       }),
       response: {
         200: t.Array(DiscountRead),
+        401: t.Object({
+          error: t.String(),
+        }),
       },
       detail: {
         summary: "Get a list of discounts",
         tags: ["discounts"],
-        description: "Get a paginated list of discounts with optional search",
+        description:
+          "Get a paginated list of discounts with optional search. Requires bearer token authentication. Returns only discounts belonging to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/:id",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [discount] = await db
         .select()
         .from(discounts)
-        .where(eq(discounts.id, params.id))
+        .where(and(eq(discounts.id, params.id), eq(discounts.organizationId, organizationId)))
         .limit(1);
 
       if (!discount) {
@@ -157,6 +211,7 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         type: discount.type,
         percentage: parseFloat(discount.percentage),
         product_id: discount.productId,
+        organization_id: discount.organizationId ?? null,
       };
     },
     {
@@ -165,6 +220,9 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       }),
       response: {
         200: "DiscountRead",
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -172,17 +230,30 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       detail: {
         summary: "Get a single discount by ID",
         tags: ["discounts"],
-        description: "Get discount details by ID",
+        description:
+          "Get discount details by ID. Requires bearer token authentication. Returns 404 if the discount doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/code/:code",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [discount] = await db
         .select()
         .from(discounts)
-        .where(eq(discounts.code, params.code))
+        .where(
+          and(eq(discounts.code, params.code), eq(discounts.organizationId, organizationId))
+        )
         .limit(1);
 
       if (!discount) {
@@ -197,6 +268,7 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         type: discount.type,
         percentage: parseFloat(discount.percentage),
         product_id: discount.productId,
+        organization_id: discount.organizationId ?? null,
       };
     },
     {
@@ -205,6 +277,9 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       }),
       response: {
         200: "DiscountRead",
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -212,17 +287,28 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       detail: {
         summary: "Get a discount by code",
         tags: ["discounts"],
-        description: "Get discount details by code",
+        description:
+          "Get discount details by code. Requires bearer token authentication. Returns 404 if the discount doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .patch(
     "/:id",
-    async ({ params, body, set }) => {
+    async ({ params, body, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [existing] = await db
         .select()
         .from(discounts)
-        .where(eq(discounts.id, params.id))
+        .where(and(eq(discounts.id, params.id), eq(discounts.organizationId, organizationId)))
         .limit(1);
 
       if (!existing) {
@@ -247,7 +333,7 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         const [product] = await db
           .select()
           .from(products)
-          .where(eq(products.id, finalProductId))
+          .where(and(eq(products.id, finalProductId), eq(products.organizationId, organizationId)))
           .limit(1);
 
         if (!product) {
@@ -269,7 +355,9 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         const [codeExists] = await db
           .select()
           .from(discounts)
-          .where(eq(discounts.code, body.code))
+          .where(
+            and(eq(discounts.code, body.code), eq(discounts.organizationId, organizationId))
+          )
           .limit(1);
 
         if (codeExists) {
@@ -298,7 +386,7 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       const [updated] = await db
         .update(discounts)
         .set(updateData)
-        .where(eq(discounts.id, params.id))
+        .where(and(eq(discounts.id, params.id), eq(discounts.organizationId, organizationId)))
         .returning();
 
       return {
@@ -308,6 +396,7 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         type: updated.type,
         percentage: parseFloat(updated.percentage),
         product_id: updated.productId,
+        organization_id: updated.organizationId ?? null,
       };
     },
     {
@@ -320,6 +409,9 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -327,17 +419,28 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       detail: {
         summary: "Update a discount by ID",
         tags: ["discounts"],
-        description: "Partially update discount information",
+        description:
+          "Partially update discount information. Requires bearer token authentication. Returns 404 if the discount doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .delete(
     "/:id",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [discount] = await db
         .select()
         .from(discounts)
-        .where(eq(discounts.id, params.id))
+        .where(and(eq(discounts.id, params.id), eq(discounts.organizationId, organizationId)))
         .limit(1);
 
       if (!discount) {
@@ -345,7 +448,9 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
         return { error: "Discount not found" };
       }
 
-      await db.delete(discounts).where(eq(discounts.id, params.id));
+      await db
+        .delete(discounts)
+        .where(and(eq(discounts.id, params.id), eq(discounts.organizationId, organizationId)));
 
       set.status = 204;
       return;
@@ -356,6 +461,9 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       }),
       response: {
         204: t.Undefined(),
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -363,7 +471,9 @@ export const discountsRouter = new Elysia({ prefix: "/discounts" })
       detail: {
         summary: "Delete a discount by ID",
         tags: ["discounts"],
-        description: "Delete a discount from the system",
+        description:
+          "Delete a discount from the system. Requires bearer token authentication. Returns 404 if the discount doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   );

@@ -5,6 +5,9 @@ import { transactionsRouter } from "./routes/transactions";
 import { discountsRouter } from "./routes/discounts";
 import { expensesRouter } from "./routes/expenses";
 import { summaryRouter } from "./routes/summary";
+import { usersRouter } from "./routes/users";
+import { organizationsRouter } from "./routes/organizations";
+import { membersRouter } from "./routes/members";
 
 const app = new Elysia()
   .onRequest(({ request, set }) => {
@@ -50,27 +53,57 @@ const app = new Elysia()
           title: "MBDara API",
           version: "1.0.0",
           description:
-            "A simple cashier API for managing products and transactions",
+            "A simple cashier API for managing products and transactions. Transaction endpoints require bearer token authentication to identify the active organization.",
         },
         tags: [
-          { name: "products", description: "Product management endpoints" },
+          {
+            name: "products",
+            description:
+              "Product management endpoints. Requires bearer token authentication.",
+          },
           {
             name: "transactions",
-            description: "Transaction management endpoints",
+            description: "Transaction management endpoints. Requires bearer token authentication.",
           },
           {
             name: "discounts",
-            description: "Discount management endpoints",
+            description:
+              "Discount management endpoints. Requires bearer token authentication.",
           },
           {
             name: "expenses",
-            description: "Expense management endpoints",
+            description:
+              "Expense management endpoints. Requires bearer token authentication.",
           },
           {
             name: "summary",
-            description: "Summary statistics and analytics endpoints",
+            description:
+              "Summary statistics and analytics endpoints. Requires bearer token authentication.",
+          },
+          {
+            name: "users",
+            description: "User management endpoints",
+          },
+          {
+            name: "organizations",
+            description: "Organization management endpoints",
+          },
+          {
+            name: "members",
+            description: "Organization member management endpoints",
           },
         ],
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              type: "http",
+              scheme: "bearer",
+              bearerFormat: "JWT",
+              description:
+                "Bearer token from session. The token is used to identify the active organization. Include it in the Authorization header as: Bearer <token>",
+            },
+          },
+        },
       },
     })
   )
@@ -86,6 +119,9 @@ const app = new Elysia()
   .use(discountsRouter)
   .use(expensesRouter)
   .use(summaryRouter)
+  .use(usersRouter)
+  .use(organizationsRouter)
+  .use(membersRouter)
   .listen(process.env.PORT ? parseInt(process.env.PORT) : 3000);
 
 console.log(

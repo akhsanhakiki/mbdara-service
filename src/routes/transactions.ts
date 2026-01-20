@@ -8,6 +8,7 @@ import {
 } from "../db/schema";
 import { eq, inArray, sql, desc, and, gte, lte } from "drizzle-orm";
 import { TransactionCreate, TransactionRead } from "../types";
+import { getOrganizationIdFromHeaders } from "../utils/auth";
 
 export const transactionsRouter = new Elysia({ prefix: "/transactions" })
   .model({
@@ -16,7 +17,19 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
   })
   .post(
     "/",
-    async ({ body, set }) => {
+    async ({ body, set, request }) => {
+      // Get organization ID from bearer token
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+
+      const organizationId = authResult.organizationId;
+
       // Load all products in single query (prevent N+1)
       const productIds = body.items.map((item) => item.product_id);
       if (productIds.length === 0) {
@@ -27,7 +40,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
       const productsList = await db
         .select()
         .from(products)
-        .where(inArray(products.id, productIds));
+        .where(and(inArray(products.id, productIds), eq(products.organizationId, organizationId)));
 
       const productDict = new Map(productsList.map((p) => [p.id, p]));
 
@@ -46,7 +59,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         const [discountData] = await db
           .select()
           .from(discounts)
-          .where(eq(discounts.code, body.discount_code))
+          .where(and(eq(discounts.code, body.discount_code), eq(discounts.organizationId, organizationId)))
           .limit(1);
 
         if (!discountData) {
@@ -152,6 +165,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             discount: body.discount_code || null,
             profit: Math.round(profit).toString(),
             paymentMethod: body.payment_method || null,
+            organizationId: organizationId,
           })
           .returning();
 
@@ -163,7 +177,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             .set({
               stock: sql`${products.stock} - ${item.quantity}`,
             })
-            .where(eq(products.id, item.productId));
+            .where(and(eq(products.id, item.productId), eq(products.organizationId, organizationId)));
 
           // Create transaction item
           await tx.insert(transactionItems).values({
@@ -204,6 +218,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           ? parseFloat(result.transaction.profit)
           : null,
         payment_method: result.transaction.paymentMethod,
+        organization_id: result.transaction.organizationId,
         items: result.items.map((item) => ({
           id: item.id,
           quantity: item.quantity,
@@ -221,6 +236,9 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -229,19 +247,31 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         summary: "Create a new transaction with items",
         tags: ["transactions"],
         description:
-          "Create a transaction, validate stock, deduct inventory, and calculate total",
+          "Create a transaction, validate stock, deduct inventory, and calculate total. Requires bearer token authentication. The transaction will be associated with the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/",
-    async ({ query, set }) => {
+    async ({ query, set, request }) => {
       try {
+        // Get organization ID from bearer token
+        const authResult = await getOrganizationIdFromHeaders(request.headers);
+
+        if (!authResult.organizationId) {
+          set.status = 401;
+          return {
+            error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+          };
+        }
+
+        const organizationId = authResult.organizationId;
         const offset = query.offset ?? 0;
         const limit = query.limit ?? 100;
 
-        // Build where conditions for date range filtering
-        const conditions = [];
+        // Build where conditions for date range filtering and organization
+        const conditions = [eq(transactions.organizationId, organizationId)];
 
         // Date range conditions
         if (query.start_date) {
@@ -272,18 +302,16 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           }
         }
 
-        // First, get paginated transactions with date filtering
+        // First, get paginated transactions with date filtering and organization
         const baseQuery = db
           .select()
           .from(transactions)
           .orderBy(desc(transactions.createdAt));
 
-        const transactionsList = conditions.length > 0
-          ? await baseQuery
-              .where(conditions.length === 1 ? conditions[0] : and(...conditions))
-              .limit(limit)
-              .offset(offset)
-          : await baseQuery.limit(limit).offset(offset);
+        const transactionsList = await baseQuery
+          .where(conditions.length === 1 ? conditions[0] : and(...conditions))
+          .limit(limit)
+          .offset(offset);
 
         if (transactionsList.length === 0) {
           return [];
@@ -333,6 +361,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             discount: txn.discount,
             profit: txn.profit ? parseFloat(txn.profit) : null,
             payment_method: txn.paymentMethod,
+            organization_id: txn.organizationId,
             items: [],
           }));
         }
@@ -346,7 +375,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         const productsData = await db
           .select()
           .from(products)
-          .where(inArray(products.id, productIds));
+          .where(and(inArray(products.id, productIds), eq(products.organizationId, organizationId)));
 
         // Create product lookup map
         const productMap = new Map(productsData.map((p) => [p.id, p]));
@@ -384,6 +413,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           discount: txn.discount,
           profit: txn.profit ? parseFloat(txn.profit) : null,
           payment_method: txn.paymentMethod,
+          organization_id: txn.organizationId,
           items: (itemsByTransaction.get(txn.id) || []).map((item) => ({
             id: item.id,
             quantity: item.quantity,
@@ -413,6 +443,9 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
         500: t.Object({
           error: t.String(),
           details: t.String(),
@@ -422,18 +455,36 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         summary: "Get a list of transactions",
         tags: ["transactions"],
         description:
-          "Get a paginated list of transactions with items and product names, with optional date range filtering",
+          "Get a paginated list of transactions with items and product names, with optional date range filtering. Requires bearer token authentication. Returns only transactions belonging to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/:id",
-    async ({ params, set }) => {
-      // First, get the transaction
+    async ({ params, set, request }) => {
+      // Get organization ID from bearer token
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+
+      const organizationId = authResult.organizationId;
+
+      // First, get the transaction with organization filter
       const [transaction] = await db
         .select()
         .from(transactions)
-        .where(eq(transactions.id, params.id))
+        .where(
+          and(
+            eq(transactions.id, params.id),
+            eq(transactions.organizationId, organizationId)
+          )
+        )
         .limit(1);
 
       if (!transaction) {
@@ -462,6 +513,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         discount: transaction.discount,
         profit: transaction.profit ? parseFloat(transaction.profit) : null,
         payment_method: transaction.paymentMethod,
+        organization_id: transaction.organizationId,
         items: itemsData.map((item) => ({
           id: item.id,
           quantity: item.quantity,
@@ -478,6 +530,9 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
       }),
       response: {
         200: "TransactionRead",
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -485,7 +540,9 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
       detail: {
         summary: "Get a single transaction by ID",
         tags: ["transactions"],
-        description: "Get transaction details with items and product names",
+        description:
+          "Get transaction details with items and product names. Requires bearer token authentication. Returns 404 if the transaction doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   );

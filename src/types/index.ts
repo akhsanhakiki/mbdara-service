@@ -20,6 +20,7 @@ export const ProductRead = t.Object({
   stock: t.Number(),
   bundle_quantity: t.Nullable(t.Number()),
   bundle_price: t.Nullable(t.Number()),
+  organization_id: t.Nullable(t.String()),
 });
 
 export const ProductUpdate = t.Object({
@@ -62,6 +63,7 @@ export const TransactionRead = t.Object({
   discount: t.Nullable(t.String()),
   profit: t.Nullable(t.Number()),
   payment_method: t.Nullable(t.String()),
+  organization_id: t.Nullable(t.String()),
   items: t.Array(TransactionItemRead),
 });
 
@@ -81,6 +83,7 @@ export const DiscountRead = t.Object({
   type: t.String(),
   percentage: t.Number(),
   product_id: t.Nullable(t.Number()),
+  organization_id: t.Nullable(t.String()),
 });
 
 export const DiscountUpdate = t.Object({
@@ -109,6 +112,7 @@ export const ExpenseRead = t.Object({
   date: t.Date(),
   category: t.Nullable(t.String()),
   payment_method: t.Nullable(t.String()),
+  organization_id: t.Nullable(t.String()),
 });
 
 export const ExpenseUpdate = t.Object({
@@ -142,4 +146,70 @@ export const SummaryResponse = t.Object({
   chart_data: t.Array(ChartDataPoint),
   top_5_products: t.Array(ProductPerformance),
   underperforming_products: t.Array(ProductPerformance),
+});
+
+// User schemas
+export const UserInvite = t.Object({
+  email: t.String({ format: "email" }),
+  name: t.Optional(t.String()),
+  role: t.Union([t.Literal("admin"), t.Literal("user")]),
+});
+
+export const UserRead = t.Object({
+  id: t.String(),
+  email: t.String(),
+  name: t.Nullable(t.String()),
+  role: t.Nullable(t.String()),
+  emailVerified: t.Nullable(t.Boolean()),
+  image: t.Nullable(t.String()),
+});
+
+export const UserRoleUpdate = t.Object({
+  role: t.Union([t.Literal("admin"), t.Literal("user")]),
+});
+
+// Organization schemas
+export const OrganizationCreate = t.Object({
+  name: t.String(),
+  logo: t.Optional(t.String()),
+  metadata: t.Optional(t.String()),
+});
+
+export const OrganizationRead = t.Object({
+  id: t.String(),
+  name: t.String(),
+  slug: t.String(),
+  logo: t.Nullable(t.String()),
+  createdAt: t.Date(),
+  metadata: t.Nullable(t.String()),
+});
+
+export const OrganizationUpdate = t.Object({
+  name: t.Optional(t.String()),
+  logo: t.Optional(t.String()),
+  metadata: t.Optional(t.String()),
+});
+
+// Member schemas
+export const MemberCreate = t.Object({
+  userId: t.String(),
+  role: t.Union([t.Literal("admin"), t.Literal("user")]),
+});
+
+export const MemberRead = t.Object({
+  id: t.String(),
+  organizationId: t.String(),
+  userId: t.String(),
+  role: t.String(),
+  createdAt: t.Date(),
+  user: t.Object({
+    id: t.String(),
+    email: t.String(),
+    name: t.Nullable(t.String()),
+    image: t.Nullable(t.String()),
+  }),
+});
+
+export const MemberUpdate = t.Object({
+  role: t.Optional(t.Union([t.Literal("admin"), t.Literal("user")])),
 });
