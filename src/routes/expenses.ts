@@ -3,6 +3,7 @@ import { db } from "../db";
 import { expenses } from "../db/schema";
 import { eq, or, ilike, and, gte, lte } from "drizzle-orm";
 import { ExpenseCreate, ExpenseRead, ExpenseUpdate } from "../types";
+import { getOrganizationIdFromHeaders } from "../utils/auth";
 
 export const expensesRouter = new Elysia({ prefix: "/expenses" })
   .model({
@@ -12,7 +13,16 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
   })
   .post(
     "/",
-    async ({ body, set }) => {
+    async ({ body, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [expense] = await db
         .insert(expenses)
         .values({
@@ -21,6 +31,7 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
           date: body.date || new Date(),
           category: body.category || null,
           paymentMethod: body.payment_method || null,
+          organizationId,
         })
         .returning();
 
@@ -32,6 +43,7 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
         date: expense.date,
         category: expense.category,
         payment_method: expense.paymentMethod,
+        organization_id: expense.organizationId ?? null,
       };
     },
     {
@@ -41,22 +53,36 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
       },
       detail: {
         summary: "Create a new expense",
         tags: ["expenses"],
-        description: "Create a new expense with amount, description, date, category, and payment method",
+        description:
+          "Create a new expense with amount, description, date, category, and payment method. Requires bearer token authentication. The expense will be associated with the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/",
-    async ({ query, set }) => {
+    async ({ query, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const offset = query.offset ?? 0;
       const limit = query.limit ?? 100;
 
       // Build where conditions
-      const conditions = [];
+      const conditions = [eq(expenses.organizationId, organizationId)];
 
       // Search condition
       if (query.search) {
@@ -112,6 +138,7 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
         date: e.date,
         category: e.category,
         payment_method: e.paymentMethod,
+        organization_id: e.organizationId ?? null,
       }));
     },
     {
@@ -127,21 +154,35 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
       },
       detail: {
         summary: "Get a list of expenses",
         tags: ["expenses"],
-        description: "Get a paginated list of expenses with optional search and date range filtering",
+        description:
+          "Get a paginated list of expenses with optional search and date range filtering. Requires bearer token authentication. Returns only expenses belonging to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/:id",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [expense] = await db
         .select()
         .from(expenses)
-        .where(eq(expenses.id, params.id))
+        .where(and(eq(expenses.id, params.id), eq(expenses.organizationId, organizationId)))
         .limit(1);
 
       if (!expense) {
@@ -156,6 +197,7 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
         date: expense.date,
         category: expense.category,
         payment_method: expense.paymentMethod,
+        organization_id: expense.organizationId ?? null,
       };
     },
     {
@@ -164,6 +206,9 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
       }),
       response: {
         200: "ExpenseRead",
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -171,17 +216,28 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
       detail: {
         summary: "Get a single expense by ID",
         tags: ["expenses"],
-        description: "Get expense details by ID",
+        description:
+          "Get expense details by ID. Requires bearer token authentication. Returns 404 if the expense doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .patch(
     "/:id",
-    async ({ params, body, set }) => {
+    async ({ params, body, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [existing] = await db
         .select()
         .from(expenses)
-        .where(eq(expenses.id, params.id))
+        .where(and(eq(expenses.id, params.id), eq(expenses.organizationId, organizationId)))
         .limit(1);
 
       if (!existing) {
@@ -209,7 +265,7 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
       const [updated] = await db
         .update(expenses)
         .set(updateData)
-        .where(eq(expenses.id, params.id))
+        .where(and(eq(expenses.id, params.id), eq(expenses.organizationId, organizationId)))
         .returning();
 
       return {
@@ -219,6 +275,7 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
         date: updated.date,
         category: updated.category,
         payment_method: updated.paymentMethod,
+        organization_id: updated.organizationId ?? null,
       };
     },
     {
@@ -231,6 +288,9 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -238,17 +298,28 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
       detail: {
         summary: "Update an expense by ID",
         tags: ["expenses"],
-        description: "Partially update expense information",
+        description:
+          "Partially update expense information. Requires bearer token authentication. Returns 404 if the expense doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .delete(
     "/:id",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [expense] = await db
         .select()
         .from(expenses)
-        .where(eq(expenses.id, params.id))
+        .where(and(eq(expenses.id, params.id), eq(expenses.organizationId, organizationId)))
         .limit(1);
 
       if (!expense) {
@@ -256,7 +327,9 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
         return { error: "Expense not found" };
       }
 
-      await db.delete(expenses).where(eq(expenses.id, params.id));
+      await db
+        .delete(expenses)
+        .where(and(eq(expenses.id, params.id), eq(expenses.organizationId, organizationId)));
 
       set.status = 204;
       return;
@@ -267,6 +340,9 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
       }),
       response: {
         204: t.Undefined(),
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -274,7 +350,9 @@ export const expensesRouter = new Elysia({ prefix: "/expenses" })
       detail: {
         summary: "Delete an expense by ID",
         tags: ["expenses"],
-        description: "Delete an expense from the system",
+        description:
+          "Delete an expense from the system. Requires bearer token authentication. Returns 404 if the expense doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   );

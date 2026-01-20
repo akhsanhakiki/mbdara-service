@@ -22,6 +22,7 @@ export const products = pgTable("product", {
   stock: integer("stock").notNull().default(0),
   bundleQuantity: integer("bundle_quantity"),
   bundlePrice: decimal("bundle_price", { precision: 10, scale: 0 }),
+  organizationId: text("organization_id"), // UUID from neon_auth.organization
 });
 
 // Transaction table
@@ -54,6 +55,7 @@ export const discounts = pgTable("discount", {
   type: varchar("type", { length: 20 }).notNull(), // 'individual_item' or 'for_all_item'
   percentage: decimal("percentage", { precision: 5, scale: 2 }).notNull(),
   productId: integer("product_id").references(() => products.id), // Required when type is 'individual_item'
+  organizationId: text("organization_id"), // UUID from neon_auth.organization
 });
 
 // Expense table
@@ -64,6 +66,7 @@ export const expenses = pgTable("expense", {
   date: timestamp("date").notNull().defaultNow(),
   category: varchar("category", { length: 255 }),
   paymentMethod: varchar("payment_method", { length: 50 }),
+  organizationId: text("organization_id"), // UUID from neon_auth.organization
 });
 
 // Relations

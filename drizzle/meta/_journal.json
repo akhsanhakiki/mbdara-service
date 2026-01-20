@@ -64,6 +64,13 @@
       "when": 1768743876572,
       "tag": "0008_early_lightspeed",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1768900487540,
+      "tag": "0009_supreme_surge",
+      "breakpoints": true
     }
   ]
 }

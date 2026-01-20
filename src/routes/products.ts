@@ -1,8 +1,9 @@
 import { Elysia, t } from "elysia";
 import { db } from "../db";
 import { products } from "../db/schema";
-import { eq, or, ilike } from "drizzle-orm";
+import { and, eq, ilike, or } from "drizzle-orm";
 import { ProductCreate, ProductRead, ProductUpdate } from "../types";
+import { getOrganizationIdFromHeaders } from "../utils/auth";
 
 export const productsRouter = new Elysia({ prefix: "/products" })
   .model({
@@ -12,7 +13,16 @@ export const productsRouter = new Elysia({ prefix: "/products" })
   })
   .post(
     "/",
-    async ({ body, set }) => {
+    async ({ body, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       // Validate bundle pricing: both fields must be provided together or both null/undefined
       if (
         (body.bundle_quantity !== undefined && body.bundle_price === undefined) ||
@@ -49,6 +59,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
             body.bundle_price !== undefined
               ? Math.round(body.bundle_price).toString()
               : null,
+          organizationId,
         })
         .returning();
 
@@ -64,6 +75,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         bundle_price: product.bundlePrice
           ? parseFloat(product.bundlePrice)
           : null,
+        organization_id: product.organizationId ?? null,
       };
     },
     {
@@ -73,28 +85,48 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
       },
       detail: {
         summary: "Create a new product",
         tags: ["products"],
-        description: "Create a new product in the system",
+        description:
+          "Create a new product in the system. Requires bearer token authentication. The product will be associated with the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/",
-    async ({ query }) => {
+    async ({ query, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const offset = query.offset ?? 0;
       const limit = query.limit ?? 100;
 
-      const baseQuery = db.select().from(products);
+      const baseQuery = db
+        .select()
+        .from(products)
+        .where(eq(products.organizationId, organizationId));
 
       const productsList = query.search
         ? await baseQuery
             .where(
-              or(
-                ilike(products.name, `%${query.search}%`),
-                ilike(products.description, `%${query.search}%`)
+              and(
+                eq(products.organizationId, organizationId),
+                or(
+                  ilike(products.name, `%${query.search}%`),
+                  ilike(products.description, `%${query.search}%`)
+                )
               )
             )
             .limit(limit)
@@ -110,6 +142,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         stock: p.stock,
         bundle_quantity: p.bundleQuantity,
         bundle_price: p.bundlePrice ? parseFloat(p.bundlePrice) : null,
+        organization_id: p.organizationId ?? null,
       }));
     },
     {
@@ -120,21 +153,35 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       }),
       response: {
         200: t.Array(ProductRead),
+        401: t.Object({
+          error: t.String(),
+        }),
       },
       detail: {
         summary: "Get a list of products",
         tags: ["products"],
-        description: "Get a paginated list of products with optional search",
+        description:
+          "Get a paginated list of products with optional search. Requires bearer token authentication. Returns only products belonging to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .get(
     "/:id",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [product] = await db
         .select()
         .from(products)
-        .where(eq(products.id, params.id))
+        .where(and(eq(products.id, params.id), eq(products.organizationId, organizationId)))
         .limit(1);
 
       if (!product) {
@@ -151,6 +198,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         stock: product.stock,
         bundle_quantity: product.bundleQuantity,
         bundle_price: product.bundlePrice ? parseFloat(product.bundlePrice) : null,
+        organization_id: product.organizationId ?? null,
       };
     },
     {
@@ -159,6 +207,9 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       }),
       response: {
         200: "ProductRead",
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -166,17 +217,28 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       detail: {
         summary: "Get a single product by ID",
         tags: ["products"],
-        description: "Get product details by ID",
+        description:
+          "Get product details by ID. Requires bearer token authentication. Returns 404 if the product doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .patch(
     "/:id",
-    async ({ params, body, set }) => {
+    async ({ params, body, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [existing] = await db
         .select()
         .from(products)
-        .where(eq(products.id, params.id))
+        .where(and(eq(products.id, params.id), eq(products.organizationId, organizationId)))
         .limit(1);
 
       if (!existing) {
@@ -233,7 +295,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       const [updated] = await db
         .update(products)
         .set(updateData)
-        .where(eq(products.id, params.id))
+        .where(and(eq(products.id, params.id), eq(products.organizationId, organizationId)))
         .returning();
 
       return {
@@ -247,6 +309,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         bundle_price: updated.bundlePrice
           ? parseFloat(updated.bundlePrice)
           : null,
+        organization_id: updated.organizationId ?? null,
       };
     },
     {
@@ -259,6 +322,9 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         400: t.Object({
           error: t.String(),
         }),
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -266,17 +332,28 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       detail: {
         summary: "Update a product by ID",
         tags: ["products"],
-        description: "Partially update product information",
+        description:
+          "Partially update product information. Requires bearer token authentication. Returns 404 if the product doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   )
   .delete(
     "/:id",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
       const [product] = await db
         .select()
         .from(products)
-        .where(eq(products.id, params.id))
+        .where(and(eq(products.id, params.id), eq(products.organizationId, organizationId)))
         .limit(1);
 
       if (!product) {
@@ -284,7 +361,9 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         return { error: "Product not found" };
       }
 
-      await db.delete(products).where(eq(products.id, params.id));
+      await db
+        .delete(products)
+        .where(and(eq(products.id, params.id), eq(products.organizationId, organizationId)));
 
       set.status = 204;
       return;
@@ -295,6 +374,9 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       }),
       response: {
         204: t.Undefined(),
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -302,7 +384,9 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       detail: {
         summary: "Delete a product by ID",
         tags: ["products"],
-        description: "Delete a product from the system",
+        description:
+          "Delete a product from the system. Requires bearer token authentication. Returns 404 if the product doesn't belong to the active organization from the session.",
+        security: [{ bearerAuth: [] }],
       },
     }
   );

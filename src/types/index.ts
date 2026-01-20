@@ -20,6 +20,7 @@ export const ProductRead = t.Object({
   stock: t.Number(),
   bundle_quantity: t.Nullable(t.Number()),
   bundle_price: t.Nullable(t.Number()),
+  organization_id: t.Nullable(t.String()),
 });
 
 export const ProductUpdate = t.Object({
@@ -82,6 +83,7 @@ export const DiscountRead = t.Object({
   type: t.String(),
   percentage: t.Number(),
   product_id: t.Nullable(t.Number()),
+  organization_id: t.Nullable(t.String()),
 });
 
 export const DiscountUpdate = t.Object({
@@ -110,6 +112,7 @@ export const ExpenseRead = t.Object({
   date: t.Date(),
   category: t.Nullable(t.String()),
   payment_method: t.Nullable(t.String()),
+  organization_id: t.Nullable(t.String()),
 });
 
 export const ExpenseUpdate = t.Object({

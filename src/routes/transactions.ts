@@ -40,7 +40,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
       const productsList = await db
         .select()
         .from(products)
-        .where(inArray(products.id, productIds));
+        .where(and(inArray(products.id, productIds), eq(products.organizationId, organizationId)));
 
       const productDict = new Map(productsList.map((p) => [p.id, p]));
 
@@ -59,7 +59,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         const [discountData] = await db
           .select()
           .from(discounts)
-          .where(eq(discounts.code, body.discount_code))
+          .where(and(eq(discounts.code, body.discount_code), eq(discounts.organizationId, organizationId)))
           .limit(1);
 
         if (!discountData) {
@@ -177,7 +177,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             .set({
               stock: sql`${products.stock} - ${item.quantity}`,
             })
-            .where(eq(products.id, item.productId));
+            .where(and(eq(products.id, item.productId), eq(products.organizationId, organizationId)));
 
           // Create transaction item
           await tx.insert(transactionItems).values({
@@ -375,7 +375,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         const productsData = await db
           .select()
           .from(products)
-          .where(inArray(products.id, productIds));
+          .where(and(inArray(products.id, productIds), eq(products.organizationId, organizationId)));
 
         // Create product lookup map
         const productMap = new Map(productsData.map((p) => [p.id, p]));
