@@ -25,11 +25,11 @@ export function extractBearerToken(authHeader: string | null): string | null {
  * @returns Object with organizationId and error message if any
  */
 export async function getActiveOrganizationId(
-  token: string
+  token: string,
 ): Promise<{ organizationId: string | null; error: string | null }> {
   try {
     const trimmedToken = token.trim();
-    
+
     // Query the session table - using quoted identifiers for camelCase columns
     const result = await pool.query(
       `SELECT 
@@ -38,13 +38,14 @@ export async function getActiveOrganizationId(
        FROM neon_auth.session
        WHERE token = $1
        LIMIT 1`,
-      [trimmedToken]
+      [trimmedToken],
     );
 
     if (result.rows.length === 0) {
       return {
         organizationId: null,
-        error: "Session not found. Token may be invalid. Please verify the token exists in the neon_auth.session table.",
+        error:
+          "Session not found. Token may be invalid. Please verify the token exists in the neon_auth.session table.",
       };
     }
 
@@ -76,15 +77,104 @@ export async function getActiveOrganizationId(
 }
 
 /**
+ * Gets the user ID from a session token
+ * @param token - The session token
+ * @returns Object with userId and error message if any
+ */
+export async function getUserIdFromToken(
+  token: string,
+): Promise<{ userId: string | null; error: string | null }> {
+  try {
+    const trimmedToken = token.trim();
+
+    // Query the session table - using quoted identifiers for camelCase columns
+    const result = await pool.query(
+      `SELECT 
+        "userId",
+        "expiresAt"
+       FROM neon_auth.session
+       WHERE token = $1
+       LIMIT 1`,
+      [trimmedToken],
+    );
+
+    if (result.rows.length === 0) {
+      return {
+        userId: null,
+        error:
+          "Session not found. Token may be invalid. Please verify the token exists in the neon_auth.session table.",
+      };
+    }
+
+    const session = result.rows[0];
+
+    // Check if session is expired
+    const expiresAt = new Date(session.expiresAt);
+    if (expiresAt < new Date()) {
+      return {
+        userId: null,
+        error: "Session expired. Please login again.",
+      };
+    }
+
+    return { userId: session.userId, error: null };
+  } catch (error) {
+    return {
+      userId: null,
+      error: `Database error: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Gets the user ID from request headers
+ * @param headers - Request headers object
+ * @returns Object with userId and error message if any
+ */
+export async function getUserIdFromHeaders(
+  headers: Headers,
+): Promise<{ userId: string | null; error: string | null }> {
+  const authHeader = headers.get("authorization");
+
+  if (!authHeader) {
+    return { userId: null, error: "Missing Authorization header" };
+  }
+
+  const token = extractBearerToken(authHeader);
+
+  if (!token) {
+    return {
+      userId: null,
+      error: "Invalid Authorization header format. Expected: Bearer <token>",
+    };
+  }
+
+  const result = await getUserIdFromToken(token);
+
+  if (result.error) {
+    return { userId: null, error: result.error };
+  }
+
+  if (!result.userId) {
+    return {
+      userId: null,
+      error: "Session not found or expired",
+    };
+  }
+
+  return { userId: result.userId, error: null };
+}
+
+/**
  * Gets the active organization ID from request headers
  * @param headers - Request headers object
  * @returns Object with organizationId and error message if any
  */
 export async function getOrganizationIdFromHeaders(
-  headers: Headers
+  headers: Headers,
 ): Promise<{ organizationId: string | null; error: string | null }> {
   const authHeader = headers.get("authorization");
-  
+
   if (!authHeader) {
     return { organizationId: null, error: "Missing Authorization header" };
   }
@@ -99,7 +189,7 @@ export async function getOrganizationIdFromHeaders(
   }
 
   const result = await getActiveOrganizationId(token);
-  
+
   if (result.error) {
     return { organizationId: null, error: result.error };
   }
