@@ -6,6 +6,7 @@ import {
   OrganizationUpdate,
 } from "../types";
 import { randomUUID } from "crypto";
+import { getUserIdFromHeaders } from "../utils/auth";
 
 // Helper function to generate slug from name
 function generateSlug(name: string): string {
@@ -26,7 +27,7 @@ async function ensureUniqueSlug(baseSlug: string): Promise<string> {
   while (true) {
     const result = await pool.query(
       `SELECT id FROM neon_auth.organization WHERE slug = $1 LIMIT 1`,
-      [slug]
+      [slug],
     );
 
     if (result.rows.length === 0) {
@@ -46,28 +47,39 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
   })
   .get(
     "/",
-    async ({ query }) => {
+    async ({ query, set, request }) => {
+      const authResult = await getUserIdFromHeaders(request.headers);
+      if (!authResult.userId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const userId = authResult.userId;
+
       const offset = query.offset ?? 0;
       const limit = query.limit ?? 100;
 
-      let sql = `SELECT 
-        id,
-        name,
-        slug,
-        logo,
-        "createdAt",
-        metadata
-      FROM neon_auth.organization`;
+      let sql = `SELECT DISTINCT
+        o.id,
+        o.name,
+        o.slug,
+        o.logo,
+        o."createdAt",
+        o.metadata
+      FROM neon_auth.organization o
+      INNER JOIN neon_auth.member m ON o.id = m."organizationId"
+      WHERE m."userId" = $1`;
 
-      const params: any[] = [];
-      let paramCount = 0;
+      const params: any[] = [userId];
+      let paramCount = 1;
 
       if (query.search) {
-        sql += ` WHERE name ILIKE $${++paramCount} OR slug ILIKE $${paramCount}`;
+        sql += ` AND (o.name ILIKE $${++paramCount} OR o.slug ILIKE $${paramCount})`;
         params.push(`%${query.search}%`);
       }
 
-      sql += ` ORDER BY "createdAt" DESC LIMIT $${++paramCount} OFFSET $${++paramCount}`;
+      sql += ` ORDER BY o."createdAt" DESC LIMIT $${++paramCount} OFFSET $${++paramCount}`;
       params.push(limit, offset);
 
       const result = await pool.query(sql, params);
@@ -89,26 +101,43 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       }),
       response: {
         200: t.Array(OrganizationRead),
+        401: t.Object({
+          error: t.String(),
+        }),
       },
       detail: {
         summary: "Get a list of organizations",
         tags: ["organizations"],
         description:
-          "Get a paginated list of organizations with optional search",
+          "Get a paginated list of organizations with optional search. Requires bearer token authentication. Returns only organizations the user is a member of.",
+        security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
   .post(
     "/",
-    async ({ body, set }) => {
+    async ({ body, set, request }) => {
+      const authResult = await getUserIdFromHeaders(request.headers);
+      if (!authResult.userId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const userId = authResult.userId;
+
       // Generate slug from name
       const baseSlug = generateSlug(body.name);
       const slug = await ensureUniqueSlug(baseSlug);
 
       const organizationId = randomUUID();
+      const memberId = randomUUID();
 
       try {
-        const result = await pool.query(
+        // Start transaction: create organization and add user as admin member
+        await pool.query("BEGIN");
+
+        const orgResult = await pool.query(
           `INSERT INTO neon_auth.organization (id, name, slug, logo, metadata, "createdAt")
            VALUES ($1, $2, $3, $4, $5, NOW())
            RETURNING id, name, slug, logo, "createdAt", metadata`,
@@ -118,15 +147,25 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
             slug,
             body.logo || null,
             body.metadata || null,
-          ]
+          ],
         );
 
-        if (result.rows.length === 0) {
+        if (orgResult.rows.length === 0) {
+          await pool.query("ROLLBACK");
           set.status = 500;
           return { error: "Failed to create organization" };
         }
 
-        const newOrg = result.rows[0];
+        // Add the creator as an admin member
+        await pool.query(
+          `INSERT INTO neon_auth.member (id, "organizationId", "userId", role, "createdAt")
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [memberId, organizationId, userId, "admin"],
+        );
+
+        await pool.query("COMMIT");
+
+        const newOrg = orgResult.rows[0];
         set.status = 201;
         return {
           id: newOrg.id,
@@ -137,6 +176,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
           metadata: newOrg.metadata,
         };
       } catch (error: any) {
+        await pool.query("ROLLBACK");
         // Check for unique constraint violation
         if (error.code === "23505") {
           set.status = 409;
@@ -153,6 +193,9 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       body: "OrganizationCreate",
       response: {
         201: "OrganizationRead",
+        401: t.Object({
+          error: t.String(),
+        }),
         409: t.Object({
           error: t.String(),
         }),
@@ -164,24 +207,35 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       detail: {
         summary: "Create a new organization",
         tags: ["organizations"],
-        description: "Create a new organization with auto-generated slug",
+        description: "Create a new organization with auto-generated slug. Requires bearer token authentication. The creator is automatically added as an admin member.",
+        security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
   .get(
     "/:organizationId",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getUserIdFromHeaders(request.headers);
+      if (!authResult.userId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const userId = authResult.userId;
+
       const result = await pool.query(
         `SELECT 
-          id,
-          name,
-          slug,
-          logo,
-          "createdAt",
-          metadata
-        FROM neon_auth.organization
-        WHERE id = $1`,
-        [params.organizationId]
+          o.id,
+          o.name,
+          o.slug,
+          o.logo,
+          o."createdAt",
+          o.metadata
+        FROM neon_auth.organization o
+        INNER JOIN neon_auth.member m ON o.id = m."organizationId"
+        WHERE o.id = $1 AND m."userId" = $2`,
+        [params.organizationId, userId],
       );
 
       if (result.rows.length === 0) {
@@ -205,6 +259,9 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       }),
       response: {
         200: "OrganizationRead",
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -212,17 +269,30 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       detail: {
         summary: "Get a single organization by ID",
         tags: ["organizations"],
-        description: "Get organization details by ID",
+        description: "Get organization details by ID. Requires bearer token authentication. Returns 404 if the user is not a member of the organization.",
+        security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
   .patch(
     "/:organizationId",
-    async ({ params, body, set }) => {
-      // Check if organization exists
+    async ({ params, body, set, request }) => {
+      const authResult = await getUserIdFromHeaders(request.headers);
+      if (!authResult.userId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const userId = authResult.userId;
+
+      // Check if organization exists and user is a member
       const checkResult = await pool.query(
-        `SELECT id, name FROM neon_auth.organization WHERE id = $1`,
-        [params.organizationId]
+        `SELECT o.id, o.name 
+         FROM neon_auth.organization o
+         INNER JOIN neon_auth.member m ON o.id = m."organizationId"
+         WHERE o.id = $1 AND m."userId" = $2`,
+        [params.organizationId, userId],
       );
 
       if (checkResult.rows.length === 0) {
@@ -268,7 +338,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
             metadata
           FROM neon_auth.organization
           WHERE id = $1`,
-          [params.organizationId]
+          [params.organizationId],
         );
         const org = result.rows[0];
         return {
@@ -323,6 +393,9 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       body: "OrganizationUpdate",
       response: {
         200: "OrganizationRead",
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -337,17 +410,41 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       detail: {
         summary: "Update an organization by ID",
         tags: ["organizations"],
-        description: "Partially update organization information",
+        description: "Partially update organization information. Requires bearer token authentication. Returns 404 if the user is not a member of the organization.",
+        security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
   .delete(
     "/:organizationId",
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
+      const authResult = await getUserIdFromHeaders(request.headers);
+      if (!authResult.userId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const userId = authResult.userId;
+
+      // Check if organization exists and user is a member
+      const checkResult = await pool.query(
+        `SELECT o.id 
+         FROM neon_auth.organization o
+         INNER JOIN neon_auth.member m ON o.id = m."organizationId"
+         WHERE o.id = $1 AND m."userId" = $2`,
+        [params.organizationId, userId],
+      );
+
+      if (checkResult.rows.length === 0) {
+        set.status = 404;
+        return { error: "Organization not found" };
+      }
+
       // Delete organization - members will be cascade deleted
       const result = await pool.query(
         `DELETE FROM neon_auth.organization WHERE id = $1 RETURNING id`,
-        [params.organizationId]
+        [params.organizationId],
       );
 
       if (result.rows.length === 0) {
@@ -364,6 +461,9 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       }),
       response: {
         204: t.Undefined(),
+        401: t.Object({
+          error: t.String(),
+        }),
         404: t.Object({
           error: t.String(),
         }),
@@ -371,7 +471,8 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       detail: {
         summary: "Delete an organization by ID",
         tags: ["organizations"],
-        description: "Delete an organization and all its members (cascade)",
+        description: "Delete an organization and all its members (cascade). Requires bearer token authentication. Returns 404 if the user is not a member of the organization.",
+        security: [{ bearerAuth: [] }],
       },
-    }
+    },
   );
