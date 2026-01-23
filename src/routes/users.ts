@@ -27,7 +27,7 @@ export const usersRouter = new Elysia({ prefix: "/users" })
         FROM neon_auth."user"
         ORDER BY email
         LIMIT $1 OFFSET $2`,
-        [limit, offset]
+        [limit, offset],
       );
 
       return result.rows.map((row: any) => ({
@@ -52,7 +52,7 @@ export const usersRouter = new Elysia({ prefix: "/users" })
         tags: ["users"],
         description: "Get a paginated list of users with their roles",
       },
-    }
+    },
   )
   .post(
     "/",
@@ -60,7 +60,7 @@ export const usersRouter = new Elysia({ prefix: "/users" })
       // Check if user with email already exists
       const checkResult = await pool.query(
         `SELECT id FROM neon_auth."user" WHERE email = $1 LIMIT 1`,
-        [body.email]
+        [body.email],
       );
 
       if (checkResult.rows.length > 0) {
@@ -77,7 +77,7 @@ export const usersRouter = new Elysia({ prefix: "/users" })
           `INSERT INTO neon_auth."user" (id, email, name, "emailVerified", role, image)
            VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING id, email, name, "emailVerified", role, image`,
-          [userId, body.email, body.name || null, false, body.role, null]
+          [userId, body.email, body.name || null, false, body.role, null],
         );
 
         if (result.rows.length === 0) {
@@ -113,7 +113,7 @@ export const usersRouter = new Elysia({ prefix: "/users" })
         tags: ["users"],
         description: "Create a new user with email and role",
       },
-    }
+    },
   )
   .patch(
     "/:id",
@@ -124,7 +124,7 @@ export const usersRouter = new Elysia({ prefix: "/users" })
          SET role = $1, "updatedAt" = NOW()
          WHERE id = $2
          RETURNING id, email, name, "emailVerified", role, image`,
-        [body.role, params.id]
+        [body.role, params.id],
       );
 
       if (result.rows.length === 0) {
@@ -158,7 +158,7 @@ export const usersRouter = new Elysia({ prefix: "/users" })
         tags: ["users"],
         description: "Update a user's role by ID",
       },
-    }
+    },
   )
   .delete(
     "/:id",
@@ -166,7 +166,7 @@ export const usersRouter = new Elysia({ prefix: "/users" })
       // Delete user directly - no need to check member table
       const result = await pool.query(
         `DELETE FROM neon_auth."user" WHERE id = $1 RETURNING id`,
-        [params.id]
+        [params.id],
       );
 
       if (result.rows.length === 0) {
@@ -192,5 +192,5 @@ export const usersRouter = new Elysia({ prefix: "/users" })
         tags: ["users"],
         description: "Delete a user by ID",
       },
-    }
+    },
   );

@@ -90,7 +90,7 @@ export const DiscountUpdate = t.Object({
   name: t.Optional(t.String()),
   code: t.Optional(t.String()),
   type: t.Optional(
-    t.Union([t.Literal("individual_item"), t.Literal("for_all_item")])
+    t.Union([t.Literal("individual_item"), t.Literal("for_all_item")]),
   ),
   percentage: t.Optional(t.Number({ minimum: 0, maximum: 100 })),
   product_id: t.Optional(t.Number()),

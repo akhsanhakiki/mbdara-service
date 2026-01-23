@@ -101,6 +101,7 @@ export const user = neonAuthSchema.table("user", {
   email: text("email").notNull(),
   emailVerified: boolean("emailVerified"), // Keep camelCase as shown in UI
   image: text("image"),
+  role: varchar("role", { length: 50 }),
 });
 
 // Organization table
