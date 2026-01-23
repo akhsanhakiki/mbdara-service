@@ -125,6 +125,14 @@ export const membersRouter = new Elysia({ prefix: "/organizations" })
           return { error: "Failed to create member" };
         }
 
+        // Update user table role to match member role
+        await pool.query(
+          `UPDATE neon_auth."user"
+           SET role = $1
+           WHERE id = $2`,
+          [body.role, body.userId]
+        );
+
         const newMember = result.rows[0];
         const user = userCheck.rows[0];
 
@@ -247,6 +255,14 @@ export const membersRouter = new Elysia({ prefix: "/organizations" })
         set.status = 404;
         return { error: "Member not found" };
       }
+
+      // Update user table role to match member role
+      await pool.query(
+        `UPDATE neon_auth."user"
+         SET role = $1
+         WHERE id = $2`,
+        [body.role, memberCheck.rows[0].userId]
+      );
 
       // Get user information
       const userResult = await pool.query(
