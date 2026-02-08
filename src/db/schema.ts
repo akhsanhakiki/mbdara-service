@@ -25,6 +25,21 @@ export const products = pgTable("product", {
   organizationId: text("organization_id"), // UUID from neon_auth.organization
 });
 
+// Product variation table – each variation has its own description and prices
+export const productVariations = pgTable("product_variation", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id")
+    .notNull()
+    .references(() => products.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 255 }),
+  description: varchar("description", { length: 1000 }),
+  price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  cogs: decimal("cogs", { precision: 10, scale: 0 }).notNull(),
+  stock: integer("stock").notNull().default(0),
+  bundleQuantity: integer("bundle_quantity"),
+  bundlePrice: decimal("bundle_price", { precision: 10, scale: 0 }),
+});
+
 // Transaction table
 export const transactions = pgTable("transaction", {
   id: serial("id").primaryKey(),
@@ -43,6 +58,9 @@ export const transactionItems = pgTable("transactionitem", {
   productId: integer("product_id")
     .notNull()
     .references(() => products.id),
+  productVariationId: integer("product_variation_id").references(
+    () => productVariations.id
+  ),
   quantity: integer("quantity").notNull(),
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
 });
@@ -71,8 +89,20 @@ export const expenses = pgTable("expense", {
 
 // Relations
 export const productsRelations = relations(products, ({ many }) => ({
+  variations: many(productVariations),
   transactionItems: many(transactionItems),
 }));
+
+export const productVariationsRelations = relations(
+  productVariations,
+  ({ one, many }) => ({
+    product: one(products, {
+      fields: [productVariations.productId],
+      references: [products.id],
+    }),
+    transactionItems: many(transactionItems),
+  })
+);
 
 export const transactionsRelations = relations(transactions, ({ many }) => ({
   items: many(transactionItems),
@@ -88,6 +118,10 @@ export const transactionItemsRelations = relations(
     product: one(products, {
       fields: [transactionItems.productId],
       references: [products.id],
+    }),
+    productVariation: one(productVariations, {
+      fields: [transactionItems.productVariationId],
+      references: [productVariations.id],
     }),
   })
 );

@@ -4,6 +4,7 @@ import {
   transactions,
   transactionItems,
   products,
+  productVariations,
   discounts,
 } from "../db/schema";
 import { eq, inArray, sql, desc, and, gte, lte } from "drizzle-orm";
@@ -53,6 +54,14 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         };
       }
 
+      // Load variations for these products (to know which products have variations and to resolve variation details)
+      const variationsList = await db
+        .select()
+        .from(productVariations)
+        .where(inArray(productVariations.productId, productIds));
+      const variationById = new Map(variationsList.map((v) => [v.id, v]));
+      const productIdsWithVariations = new Set(variationsList.map((v) => v.productId));
+
       // Validate and fetch discount if code provided
       let discount = null;
       if (body.discount_code) {
@@ -77,48 +86,93 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
       let totalCOGS = 0;
       const itemsToCreate: Array<{
         productId: number;
+        productVariationId: number | null;
         quantity: number;
         price: string;
       }> = [];
 
       for (const item of body.items) {
         const product = productDict.get(item.product_id)!;
+        const variationId = item.product_variation_id;
+        const hasVariationId = variationId !== undefined && variationId !== null;
 
-        if (product.stock < item.quantity) {
+        if (productIdsWithVariations.has(product.id) && !hasVariationId) {
           set.status = 400;
           return {
-            error: `Not enough stock for product '${product.name}'. Available: ${product.stock}, Requested: ${item.quantity}`,
+            error: `Product '${product.name}' has variations; product_variation_id is required`,
+          };
+        }
+        if (!productIdsWithVariations.has(product.id) && hasVariationId) {
+          set.status = 400;
+          return {
+            error: `Product '${product.name}' has no variations; product_variation_id must not be provided`,
+          };
+        }
+
+        let sellable: {
+          stock: number;
+          price: string;
+          cogs: string;
+          bundleQuantity: number | null;
+          bundlePrice: string | null;
+        };
+        let productVariationId: number | null = null;
+
+        if (hasVariationId) {
+          const variation = variationById.get(variationId!);
+          if (!variation || variation.productId !== product.id) {
+            set.status = 400;
+            return {
+              error: `Invalid product_variation_id for product_id ${product.id}`,
+            };
+          }
+          sellable = {
+            stock: variation.stock,
+            price: variation.price,
+            cogs: variation.cogs,
+            bundleQuantity: variation.bundleQuantity,
+            bundlePrice: variation.bundlePrice,
+          };
+          productVariationId = variation.id;
+        } else {
+          sellable = {
+            stock: product.stock,
+            price: product.price,
+            cogs: product.cogs,
+            bundleQuantity: product.bundleQuantity,
+            bundlePrice: product.bundlePrice,
+          };
+        }
+
+        if (sellable.stock < item.quantity) {
+          set.status = 400;
+          return {
+            error: `Not enough stock for ${product.name}${productVariationId ? " (variation)" : ""}. Available: ${sellable.stock}, Requested: ${item.quantity}`,
           };
         }
 
         // Calculate item price total with bundle pricing
         let itemTotal = 0;
-        const individualPrice = parseFloat(product.price);
-        const bundleQuantity = product.bundleQuantity;
-        const bundlePrice = product.bundlePrice
-          ? parseFloat(product.bundlePrice)
+        const individualPrice = parseFloat(sellable.price);
+        const bundleQuantity = sellable.bundleQuantity;
+        const bundlePrice = sellable.bundlePrice
+          ? parseFloat(sellable.bundlePrice)
           : null;
 
-        // Check if product has bundle pricing and quantity qualifies
         if (
           bundleQuantity !== null &&
           bundlePrice !== null &&
           item.quantity >= bundleQuantity
         ) {
-          // Calculate bundles and remaining items
           const bundles = Math.floor(item.quantity / bundleQuantity);
           const remaining = item.quantity % bundleQuantity;
-
-          // Bundle total (bundles × bundleQuantity × bundlePrice per item) + individual total for remaining items
           itemTotal =
             bundles * bundleQuantity * bundlePrice +
             remaining * individualPrice;
         } else {
-          // Use regular pricing
           itemTotal = individualPrice * item.quantity;
         }
 
-        // Apply discount if type is individual_item AND product matches
         if (
           discount &&
           discount.type === "individual_item" &&
@@ -131,14 +185,11 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         }
 
         totalAmount += itemTotal;
+        totalCOGS += parseFloat(sellable.cogs) * item.quantity;
 
-        // Calculate COGS for this item
-        const cogs = parseFloat(product.cogs);
-        totalCOGS += cogs * item.quantity;
-
-        // Store the calculated total price (not per-unit price)
         itemsToCreate.push({
           productId: product.id,
+          productVariationId,
           quantity: item.quantity,
           price: itemTotal.toString(),
         });
@@ -171,35 +222,50 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
 
         // Deduct stock and create transaction items
         for (const item of itemsToCreate) {
-          // Update stock
-          await tx
-            .update(products)
-            .set({
-              stock: sql`${products.stock} - ${item.quantity}`,
-            })
-            .where(and(eq(products.id, item.productId), eq(products.organizationId, organizationId)));
+          if (item.productVariationId !== null) {
+            await tx
+              .update(productVariations)
+              .set({
+                stock: sql`${productVariations.stock} - ${item.quantity}`,
+              })
+              .where(eq(productVariations.id, item.productVariationId));
+          } else {
+            await tx
+              .update(products)
+              .set({
+                stock: sql`${products.stock} - ${item.quantity}`,
+              })
+              .where(and(eq(products.id, item.productId), eq(products.organizationId, organizationId)));
+          }
 
-          // Create transaction item
           await tx.insert(transactionItems).values({
             transactionId: newTransaction.id,
             productId: item.productId,
+            productVariationId: item.productVariationId,
             quantity: item.quantity,
             price: item.price,
           });
         }
 
-        // Fetch created items with product names
+        // Fetch created items with product and optional variation info
         const createdItems = await tx
           .select({
             id: transactionItems.id,
             quantity: transactionItems.quantity,
             price: transactionItems.price,
             product_id: transactionItems.productId,
+            product_variation_id: transactionItems.productVariationId,
             transaction_id: transactionItems.transactionId,
             product_name: products.name,
+            variation_name: productVariations.name,
+            variation_description: productVariations.description,
           })
           .from(transactionItems)
           .innerJoin(products, eq(transactionItems.productId, products.id))
+          .leftJoin(
+            productVariations,
+            eq(transactionItems.productVariationId, productVariations.id)
+          )
           .where(eq(transactionItems.transactionId, newTransaction.id));
 
         return {
@@ -224,8 +290,11 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           quantity: item.quantity,
           price: parseFloat(item.price),
           product_id: item.product_id,
+          product_variation_id: item.product_variation_id,
           transaction_id: item.transaction_id,
           product_name: item.product_name,
+          variation_name: item.variation_name,
+          variation_description: item.variation_description,
         })),
       };
     },
@@ -333,7 +402,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             .map((_, i) => `$${i + 1}`)
             .join(", ");
           const query = `
-            SELECT id, transaction_id, product_id, quantity, price
+            SELECT id, transaction_id, product_id, product_variation_id, quantity, price
             FROM transactionitem
             WHERE transaction_id IS NOT NULL
             AND transaction_id IN (${placeholders})
@@ -347,6 +416,7 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             id: row.id,
             transactionId: row.transaction_id,
             productId: row.product_id,
+            productVariationId: row.product_variation_id ?? null,
             quantity: row.quantity,
             price: row.price,
           })) as (typeof transactionItems.$inferSelect)[];
@@ -366,30 +436,58 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
           }));
         }
 
-        // Get all unique product IDs from items
+        // Get all unique product IDs and variation IDs from items
         const productIds = [
           ...new Set(itemsData.map((item) => item.productId)),
         ];
+        const variationIds = [
+          ...new Set(
+            itemsData
+              .map((item) => item.productVariationId)
+              .filter((id): id is number => id != null)
+          ),
+        ];
 
-        // Get all products in one query (like Python's selectinload)
         const productsData = await db
           .select()
           .from(products)
           .where(and(inArray(products.id, productIds), eq(products.organizationId, organizationId)));
 
-        // Create product lookup map
         const productMap = new Map(productsData.map((p) => [p.id, p]));
 
-        // Build items with product names (mimicking Python's approach)
+        let variationMap = new Map<
+          number,
+          { name: string | null; description: string | null }
+        >();
+        if (variationIds.length > 0) {
+          const variationsData = await db
+            .select({
+              id: productVariations.id,
+              name: productVariations.name,
+              description: productVariations.description,
+            })
+            .from(productVariations)
+            .where(inArray(productVariations.id, variationIds));
+          variationMap = new Map(
+            variationsData.map((v) => [v.id, { name: v.name, description: v.description }])
+          );
+        }
+
         const itemsWithProducts = itemsData.map((item) => {
           const product = productMap.get(item.productId);
+          const variation = item.productVariationId
+            ? variationMap.get(item.productVariationId!)
+            : undefined;
           return {
             id: item.id,
             quantity: item.quantity,
             price: item.price,
             product_id: item.productId,
+            product_variation_id: item.productVariationId,
             transaction_id: item.transactionId,
             product_name: product?.name || "",
+            variation_name: variation?.name ?? null,
+            variation_description: variation?.description ?? null,
           };
         });
 
@@ -419,8 +517,11 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
             quantity: item.quantity,
             price: parseFloat(item.price),
             product_id: item.product_id,
+            product_variation_id: item.product_variation_id,
             transaction_id: item.transaction_id,
             product_name: item.product_name,
+            variation_name: item.variation_name,
+            variation_description: item.variation_description,
           })),
         }));
       } catch (error) {
@@ -492,18 +593,25 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         return { error: "Transaction not found" };
       }
 
-      // Then, eager load items and products (prevent N+1)
+      // Then, eager load items with product and optional variation
       const itemsData = await db
         .select({
           id: transactionItems.id,
           quantity: transactionItems.quantity,
           price: transactionItems.price,
           product_id: transactionItems.productId,
+          product_variation_id: transactionItems.productVariationId,
           transaction_id: transactionItems.transactionId,
           product_name: products.name,
+          variation_name: productVariations.name,
+          variation_description: productVariations.description,
         })
         .from(transactionItems)
         .innerJoin(products, eq(transactionItems.productId, products.id))
+        .leftJoin(
+          productVariations,
+          eq(transactionItems.productVariationId, productVariations.id)
+        )
         .where(eq(transactionItems.transactionId, params.id));
 
       return {
@@ -517,10 +625,13 @@ export const transactionsRouter = new Elysia({ prefix: "/transactions" })
         items: itemsData.map((item) => ({
           id: item.id,
           quantity: item.quantity,
-          price: parseFloat(item.price) / item.quantity,
+          price: parseFloat(item.price),
           product_id: item.product_id,
+          product_variation_id: item.product_variation_id,
           transaction_id: item.transaction_id,
           product_name: item.product_name,
+          variation_name: item.variation_name,
+          variation_description: item.variation_description,
         })),
       };
     },
