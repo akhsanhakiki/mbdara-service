@@ -1,3 +1,4 @@
+import "./env-load";
 import { Elysia } from "elysia";
 import { openapi } from "@elysiajs/openapi";
 import { productsRouter } from "./routes/products";

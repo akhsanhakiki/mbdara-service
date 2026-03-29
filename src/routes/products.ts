@@ -6,11 +6,63 @@ import {
   ProductCreate,
   ProductRead,
   ProductUpdate,
+  ProductPhotoUploadUrlBody,
+  ProductPhotoUploadUrlResponse,
   ProductVariationCreate,
   ProductVariationRead,
   ProductVariationUpdate,
 } from "../types";
 import { getOrganizationIdFromHeaders } from "../utils/auth";
+import {
+  createPresignedProductPhotoUpload,
+  deleteObjectByKey,
+  extensionForContentType,
+  getMissingR2EnvKeys,
+  isKeyForProduct,
+  isR2Configured,
+  photoUrlFromKey,
+  productPhotoKeyPrefix,
+} from "../lib/r2";
+
+function mapProductToRead(
+  product: {
+    id: number;
+    name: string;
+    price: string;
+    cogs: string;
+    description: string | null;
+    stock: number;
+    bundleQuantity: number | null;
+    bundlePrice: string | null;
+    organizationId: string | null;
+    photoKey: string | null;
+  },
+  variationsList: Array<{
+    id: number;
+    productId: number;
+    name: string | null;
+    description: string | null;
+    price: string;
+    cogs: string;
+    stock: number;
+    bundleQuantity: number | null;
+    bundlePrice: string | null;
+  }>
+) {
+  return {
+    id: product.id,
+    name: product.name,
+    price: parseFloat(product.price),
+    cogs: parseFloat(product.cogs),
+    description: product.description,
+    stock: product.stock,
+    bundle_quantity: product.bundleQuantity,
+    bundle_price: product.bundlePrice ? parseFloat(product.bundlePrice) : null,
+    organization_id: product.organizationId ?? null,
+    photo_url: photoUrlFromKey(product.photoKey),
+    variations: variationsList.map(mapVariationToRead),
+  };
+}
 
 function mapVariationToRead(v: {
   id: number;
@@ -60,6 +112,8 @@ export const productsRouter = new Elysia({ prefix: "/products" })
     ProductCreate,
     ProductRead,
     ProductUpdate,
+    ProductPhotoUploadUrlBody,
+    ProductPhotoUploadUrlResponse,
     ProductVariationCreate,
     ProductVariationRead,
     ProductVariationUpdate,
@@ -162,20 +216,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       }
 
       set.status = 201;
-      return {
-        id: product.id,
-        name: product.name,
-        price: parseFloat(product.price),
-        cogs: parseFloat(product.cogs),
-        description: product.description,
-        stock: product.stock,
-        bundle_quantity: product.bundleQuantity,
-        bundle_price: product.bundlePrice
-          ? parseFloat(product.bundlePrice)
-          : null,
-        organization_id: product.organizationId ?? null,
-        variations: variationsList.map(mapVariationToRead),
-      };
+      return mapProductToRead(product, variationsList);
     },
     {
       body: "ProductCreate",
@@ -251,20 +292,9 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         variationsByProductId.set(v.productId, arr);
       }
 
-      return productsList.map((p) => ({
-        id: p.id,
-        name: p.name,
-        price: parseFloat(p.price),
-        cogs: parseFloat(p.cogs),
-        description: p.description,
-        stock: p.stock,
-        bundle_quantity: p.bundleQuantity,
-        bundle_price: p.bundlePrice ? parseFloat(p.bundlePrice) : null,
-        organization_id: p.organizationId ?? null,
-        variations: (variationsByProductId.get(p.id) ?? []).map(
-          mapVariationToRead
-        ),
-      }));
+      return productsList.map((p) =>
+        mapProductToRead(p, variationsByProductId.get(p.id) ?? [])
+      );
     },
     {
       query: t.Object({
@@ -642,6 +672,90 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       },
     }
   )
+  .post(
+    "/:id/photo/upload-url",
+    async ({ params, body, set, request }) => {
+      const authResult = await getOrganizationIdFromHeaders(request.headers);
+      if (!authResult.organizationId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const organizationId = authResult.organizationId;
+
+      if (!isR2Configured()) {
+        set.status = 503;
+        const missing = getMissingR2EnvKeys();
+        return {
+          error: `Object storage is not configured. Missing or empty: ${missing.join(", ")}. Add them to .env (exact names) and restart the server.`,
+        };
+      }
+
+      const [product] = await db
+        .select()
+        .from(products)
+        .where(
+          and(
+            eq(products.id, params.id),
+            eq(products.organizationId, organizationId)
+          )
+        )
+        .limit(1);
+
+      if (!product) {
+        set.status = 404;
+        return { error: "Product not found" };
+      }
+
+      const contentType = body?.content_type ?? "image/jpeg";
+      const ext = extensionForContentType(contentType);
+      if (!ext) {
+        set.status = 400;
+        return {
+          error:
+            "Unsupported content_type. Use image/jpeg, image/png, image/webp, or image/gif.",
+        };
+      }
+
+      const photoKey = `${productPhotoKeyPrefix(organizationId, product.id)}/${crypto.randomUUID()}.${ext}`;
+      const signed = await createPresignedProductPhotoUpload(
+        photoKey,
+        contentType
+      );
+      if (!signed) {
+        set.status = 503;
+        return { error: "Could not create upload URL" };
+      }
+
+      return {
+        upload_url: signed.uploadUrl,
+        photo_key: photoKey,
+        photo_url: photoUrlFromKey(photoKey)!,
+        expires_in: signed.expiresIn,
+      };
+    },
+    {
+      params: t.Object({
+        id: t.Number(),
+      }),
+      body: "ProductPhotoUploadUrlBody",
+      response: {
+        200: "ProductPhotoUploadUrlResponse",
+        400: t.Object({ error: t.String() }),
+        401: t.Object({ error: t.String() }),
+        404: t.Object({ error: t.String() }),
+        503: t.Object({ error: t.String() }),
+      },
+      detail: {
+        summary: "Get a presigned URL to upload a product photo to R2",
+        tags: ["products"],
+        description:
+          "Returns a presigned PUT URL. Upload the file with the same Content-Type as requested, then PATCH the product with { photo_key } to attach it.",
+        security: [{ bearerAuth: [] }],
+      },
+    }
+  )
   .get(
     "/:id",
     async ({ params, set, request }) => {
@@ -670,18 +784,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         .from(productVariations)
         .where(eq(productVariations.productId, product.id));
 
-      return {
-        id: product.id,
-        name: product.name,
-        price: parseFloat(product.price),
-        cogs: parseFloat(product.cogs),
-        description: product.description,
-        stock: product.stock,
-        bundle_quantity: product.bundleQuantity,
-        bundle_price: product.bundlePrice ? parseFloat(product.bundlePrice) : null,
-        organization_id: product.organizationId ?? null,
-        variations: variationsList.map(mapVariationToRead),
-      };
+      return mapProductToRead(product, variationsList);
     },
     {
       params: t.Object({
@@ -750,6 +853,21 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         return { error: "bundle_price must be greater than or equal to 0" };
       }
 
+      if (body.photo_key !== undefined) {
+        if (body.photo_key === null) {
+          if (existing.photoKey) {
+            await deleteObjectByKey(existing.photoKey);
+          }
+        } else if (
+          !isKeyForProduct(body.photo_key, organizationId, params.id)
+        ) {
+          set.status = 400;
+          return { error: "photo_key does not belong to this product" };
+        } else if (existing.photoKey && existing.photoKey !== body.photo_key) {
+          await deleteObjectByKey(existing.photoKey);
+        }
+      }
+
       const updateData: {
         name?: string;
         price?: string;
@@ -758,6 +876,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         stock?: number;
         bundleQuantity?: number | null;
         bundlePrice?: string | null;
+        photoKey?: string | null;
       } = {};
 
       if (body.name !== undefined) updateData.name = body.name;
@@ -773,6 +892,9 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         updateData.bundlePrice =
           body.bundle_price !== null ? Math.round(body.bundle_price).toString() : null;
       }
+      if (body.photo_key !== undefined) {
+        updateData.photoKey = body.photo_key;
+      }
 
       const [updated] = await db
         .update(products)
@@ -785,20 +907,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         .from(productVariations)
         .where(eq(productVariations.productId, updated.id));
 
-      return {
-        id: updated.id,
-        name: updated.name,
-        price: parseFloat(updated.price),
-        cogs: parseFloat(updated.cogs),
-        description: updated.description,
-        stock: updated.stock,
-        bundle_quantity: updated.bundleQuantity,
-        bundle_price: updated.bundlePrice
-          ? parseFloat(updated.bundlePrice)
-          : null,
-        organization_id: updated.organizationId ?? null,
-        variations: variationsList.map(mapVariationToRead),
-      };
+      return mapProductToRead(updated, variationsList);
     },
     {
       params: t.Object({
@@ -847,6 +956,10 @@ export const productsRouter = new Elysia({ prefix: "/products" })
       if (!product) {
         set.status = 404;
         return { error: "Product not found" };
+      }
+
+      if (product.photoKey) {
+        await deleteObjectByKey(product.photoKey);
       }
 
       await db

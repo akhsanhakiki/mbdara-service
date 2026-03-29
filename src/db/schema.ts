@@ -23,6 +23,8 @@ export const products = pgTable("product", {
   bundleQuantity: integer("bundle_quantity"),
   bundlePrice: decimal("bundle_price", { precision: 10, scale: 0 }),
   organizationId: text("organization_id"), // UUID from neon_auth.organization
+  /** R2 object key; public URL is derived via R2_PUBLIC_URL */
+  photoKey: text("photo_key"),
 });
 
 // Product variation table – each variation has its own description and prices

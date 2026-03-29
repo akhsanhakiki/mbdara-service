@@ -55,6 +55,8 @@ export const ProductRead = t.Object({
   bundle_quantity: t.Nullable(t.Number()),
   bundle_price: t.Nullable(t.Number()),
   organization_id: t.Nullable(t.String()),
+  /** Public URL for product image when photo_key is set */
+  photo_url: t.Nullable(t.String()),
   variations: t.Array(ProductVariationRead),
 });
 
@@ -66,6 +68,19 @@ export const ProductUpdate = t.Object({
   stock: t.Optional(t.Number()),
   bundle_quantity: t.Optional(t.Number({ minimum: 1 })),
   bundle_price: t.Optional(t.Number({ minimum: 0 })),
+  /** R2 key from upload-url response; null clears the photo */
+  photo_key: t.Optional(t.Nullable(t.String())),
+});
+
+export const ProductPhotoUploadUrlBody = t.Object({
+  content_type: t.Optional(t.String()),
+});
+
+export const ProductPhotoUploadUrlResponse = t.Object({
+  upload_url: t.String(),
+  photo_key: t.String(),
+  photo_url: t.String(),
+  expires_in: t.Number(),
 });
 
 // TransactionItem schemas
