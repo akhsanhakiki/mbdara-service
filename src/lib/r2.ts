@@ -1,14 +1,4 @@
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-
-const PRESIGN_EXPIRES_SEC = 3600;
-
-const ALLOWED_TYPES: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "image/gif": "gif",
-};
 
 function getClient(): S3Client | null {
   const accountId = process.env.R2_ACCOUNT_ID;
@@ -41,10 +31,6 @@ export function isR2Configured(): boolean {
   return getMissingR2EnvKeys().length === 0;
 }
 
-export function extensionForContentType(contentType: string): string | null {
-  return ALLOWED_TYPES[contentType] ?? null;
-}
-
 /** Build public URL for an object key (segments encoded, slashes preserved). */
 export function publicUrlForKey(key: string): string {
   const base = process.env.R2_PUBLIC_URL!.replace(/\/$/, "");
@@ -75,26 +61,6 @@ export function isKeyForProduct(
   return key === prefix || key.startsWith(`${prefix}/`);
 }
 
-export async function createPresignedProductPhotoUpload(
-  key: string,
-  contentType: string
-): Promise<{ uploadUrl: string; expiresIn: number } | null> {
-  const bucket = process.env.R2_BUCKET_NAME;
-  const client = getClient();
-  if (!bucket || !client) {
-    return null;
-  }
-  const command = new PutObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    ContentType: contentType,
-  });
-  const uploadUrl = await getSignedUrl(client, command, {
-    expiresIn: PRESIGN_EXPIRES_SEC,
-  });
-  return { uploadUrl, expiresIn: PRESIGN_EXPIRES_SEC };
-}
-
 export async function deleteObjectByKey(key: string): Promise<void> {
   const bucket = process.env.R2_BUCKET_NAME;
   const client = getClient();
@@ -103,5 +69,25 @@ export async function deleteObjectByKey(key: string): Promise<void> {
   }
   await client.send(
     new DeleteObjectCommand({ Bucket: bucket, Key: key })
+  );
+}
+
+export async function putProductPhotoWebp(
+  key: string,
+  body: Buffer
+): Promise<void> {
+  const bucket = process.env.R2_BUCKET_NAME;
+  const client = getClient();
+  if (!bucket || !client) {
+    throw new Error("R2 not configured");
+  }
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: "image/webp",
+      CacheControl: "public, max-age=31536000, immutable",
+    })
   );
 }

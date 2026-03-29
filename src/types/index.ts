@@ -68,19 +68,13 @@ export const ProductUpdate = t.Object({
   stock: t.Optional(t.Number()),
   bundle_quantity: t.Optional(t.Number({ minimum: 1 })),
   bundle_price: t.Optional(t.Number({ minimum: 0 })),
-  /** R2 key from upload-url response; null clears the photo */
+  /** Manual R2 key or null to clear; normally photos are set via POST .../photo/upload-url */
   photo_key: t.Optional(t.Nullable(t.String())),
 });
 
-export const ProductPhotoUploadUrlBody = t.Object({
-  content_type: t.Optional(t.String()),
-});
-
-export const ProductPhotoUploadUrlResponse = t.Object({
-  upload_url: t.String(),
-  photo_key: t.String(),
-  photo_url: t.String(),
-  expires_in: t.Number(),
+/** multipart/form-data field name: `file` — POST /products/:id/photo/upload-url */
+export const ProductPhotoUploadBody = t.Object({
+  file: t.File({ type: "image", maxSize: "20m" }),
 });
 
 // TransactionItem schemas
