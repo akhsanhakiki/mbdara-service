@@ -4,9 +4,19 @@ import {
   OrganizationCreate,
   OrganizationRead,
   OrganizationUpdate,
+  OrganizationLogoUploadBody,
 } from "../types";
 import { randomUUID } from "crypto";
 import { getUserIdFromHeaders } from "../utils/auth";
+import {
+  deleteObjectByKey,
+  getMissingR2EnvKeys,
+  isR2Configured,
+  organizationLogoKeyPrefix,
+  photoUrlFromKey,
+  putWebpObject,
+} from "../lib/r2";
+import { optimizeOrganizationLogoToWebp } from "../lib/product-image";
 
 // Helper function to generate slug from name
 function generateSlug(name: string): string {
@@ -20,6 +30,13 @@ function generateSlug(name: string): string {
 }
 
 // Helper function to ensure unique slug
+function mapOrganizationLogo(row: {
+  logo: string | null;
+  logo_key: string | null;
+}): string | null {
+  return photoUrlFromKey(row.logo_key) ?? row.logo ?? null;
+}
+
 async function ensureUniqueSlug(baseSlug: string): Promise<string> {
   let slug = baseSlug;
   let counter = 1;
@@ -44,6 +61,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
     OrganizationCreate,
     OrganizationRead,
     OrganizationUpdate,
+    OrganizationLogoUploadBody,
   })
   .get(
     "/",
@@ -65,6 +83,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
         o.name,
         o.slug,
         o.logo,
+        o.logo_key,
         o."createdAt",
         o.metadata
       FROM neon_auth.organization o
@@ -88,7 +107,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
         id: row.id,
         name: row.name,
         slug: row.slug,
-        logo: row.logo,
+        logo: mapOrganizationLogo(row),
         createdAt: row.createdAt,
         metadata: row.metadata,
       }));
@@ -138,16 +157,10 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
         await pool.query("BEGIN");
 
         const orgResult = await pool.query(
-          `INSERT INTO neon_auth.organization (id, name, slug, logo, metadata, "createdAt")
-           VALUES ($1, $2, $3, $4, $5, NOW())
-           RETURNING id, name, slug, logo, "createdAt", metadata`,
-          [
-            organizationId,
-            body.name,
-            slug,
-            body.logo || null,
-            body.metadata || null,
-          ],
+          `INSERT INTO neon_auth.organization (id, name, slug, metadata, "createdAt")
+           VALUES ($1, $2, $3, $4, NOW())
+           RETURNING id, name, slug, logo, logo_key, "createdAt", metadata`,
+          [organizationId, body.name, slug, body.metadata || null],
         );
 
         if (orgResult.rows.length === 0) {
@@ -171,7 +184,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
           id: newOrg.id,
           name: newOrg.name,
           slug: newOrg.slug,
-          logo: newOrg.logo,
+          logo: mapOrganizationLogo(newOrg),
           createdAt: newOrg.createdAt,
           metadata: newOrg.metadata,
         };
@@ -212,6 +225,170 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       },
     },
   )
+  .post(
+    "/:organizationId/logo/upload-url",
+    async ({ params, body, set, request }) => {
+      const authResult = await getUserIdFromHeaders(request.headers);
+      if (!authResult.userId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const userId = authResult.userId;
+
+      if (!isR2Configured()) {
+        set.status = 503;
+        const missing = getMissingR2EnvKeys();
+        return {
+          error: `Object storage is not configured. Missing or empty: ${missing.join(", ")}. Add them to .env (exact names) and restart the server.`,
+        };
+      }
+
+      const memberResult = await pool.query(
+        `SELECT o.id, o.logo_key, o.logo
+         FROM neon_auth.organization o
+         INNER JOIN neon_auth.member m ON o.id = m."organizationId"
+         WHERE o.id = $1 AND m."userId" = $2`,
+        [params.organizationId, userId],
+      );
+
+      if (memberResult.rows.length === 0) {
+        set.status = 404;
+        return { error: "Organization not found" };
+      }
+
+      const org = memberResult.rows[0];
+      const raw = Buffer.from(await body.file.arrayBuffer());
+      let webp: Buffer;
+      try {
+        webp = await optimizeOrganizationLogoToWebp(raw);
+      } catch {
+        set.status = 400;
+        return {
+          error:
+            "Could not process image. Use a valid JPEG, PNG, GIF, or WebP file.",
+        };
+      }
+
+      const logoKey = `${organizationLogoKeyPrefix(org.id)}/${crypto.randomUUID()}.webp`;
+
+      if (org.logo_key) {
+        await deleteObjectByKey(org.logo_key);
+      }
+
+      try {
+        await putWebpObject(logoKey, webp);
+      } catch {
+        set.status = 503;
+        return { error: "Could not store image in object storage" };
+      }
+
+      const updateResult = await pool.query(
+        `UPDATE neon_auth.organization
+         SET logo_key = $1, logo = NULL
+         WHERE id = $2
+         RETURNING id, name, slug, logo, logo_key, "createdAt", metadata`,
+        [logoKey, params.organizationId],
+      );
+
+      const updated = updateResult.rows[0];
+      return {
+        id: updated.id,
+        name: updated.name,
+        slug: updated.slug,
+        logo: mapOrganizationLogo(updated),
+        createdAt: updated.createdAt,
+        metadata: updated.metadata,
+      };
+    },
+    {
+      params: t.Object({
+        organizationId: t.String(),
+      }),
+      body: "OrganizationLogoUploadBody",
+      response: {
+        200: "OrganizationRead",
+        400: t.Object({ error: t.String() }),
+        401: t.Object({ error: t.String() }),
+        404: t.Object({ error: t.String() }),
+        503: t.Object({ error: t.String() }),
+      },
+      detail: {
+        summary: "Upload shop (organization) logo",
+        tags: ["organizations"],
+        description:
+          "multipart/form-data field `file`. Logo is resized (max edge 512px), optimized WebP, stored in R2. Replaces any existing logo URL or file.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+  .delete(
+    "/:organizationId/logo",
+    async ({ params, set, request }) => {
+      const authResult = await getUserIdFromHeaders(request.headers);
+      if (!authResult.userId) {
+        set.status = 401;
+        return {
+          error: `Unauthorized: ${authResult.error || "Invalid or missing bearer token"}`,
+        };
+      }
+      const userId = authResult.userId;
+
+      const memberResult = await pool.query(
+        `SELECT o.id, o.logo_key
+         FROM neon_auth.organization o
+         INNER JOIN neon_auth.member m ON o.id = m."organizationId"
+         WHERE o.id = $1 AND m."userId" = $2`,
+        [params.organizationId, userId],
+      );
+
+      if (memberResult.rows.length === 0) {
+        set.status = 404;
+        return { error: "Organization not found" };
+      }
+
+      const org = memberResult.rows[0];
+      if (org.logo_key) {
+        await deleteObjectByKey(org.logo_key);
+      }
+
+      const updateResult = await pool.query(
+        `UPDATE neon_auth.organization
+         SET logo_key = NULL, logo = NULL
+         WHERE id = $1
+         RETURNING id, name, slug, logo, logo_key, "createdAt", metadata`,
+        [params.organizationId],
+      );
+
+      const updated = updateResult.rows[0];
+      return {
+        id: updated.id,
+        name: updated.name,
+        slug: updated.slug,
+        logo: mapOrganizationLogo(updated),
+        createdAt: updated.createdAt,
+        metadata: updated.metadata,
+      };
+    },
+    {
+      params: t.Object({
+        organizationId: t.String(),
+      }),
+      response: {
+        200: "OrganizationRead",
+        401: t.Object({ error: t.String() }),
+        404: t.Object({ error: t.String() }),
+      },
+      detail: {
+        summary: "Remove shop logo",
+        tags: ["organizations"],
+        description:
+          "Clears logo URL and removes the logo file from object storage if present.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
   .get(
     "/:organizationId",
     async ({ params, set, request }) => {
@@ -230,6 +407,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
           o.name,
           o.slug,
           o.logo,
+          o.logo_key,
           o."createdAt",
           o.metadata
         FROM neon_auth.organization o
@@ -248,7 +426,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
         id: org.id,
         name: org.name,
         slug: org.slug,
-        logo: org.logo,
+        logo: mapOrganizationLogo(org),
         createdAt: org.createdAt,
         metadata: org.metadata,
       };
@@ -316,11 +494,6 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
         paramsList.push(body.name);
       }
 
-      if (body.logo !== undefined) {
-        updateFields.push(`logo = $${++paramCount}`);
-        paramsList.push(body.logo || null);
-      }
-
       if (body.metadata !== undefined) {
         updateFields.push(`metadata = $${++paramCount}`);
         paramsList.push(body.metadata || null);
@@ -334,6 +507,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
             name,
             slug,
             logo,
+            logo_key,
             "createdAt",
             metadata
           FROM neon_auth.organization
@@ -345,7 +519,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
           id: org.id,
           name: org.name,
           slug: org.slug,
-          logo: org.logo,
+          logo: mapOrganizationLogo(org),
           createdAt: org.createdAt,
           metadata: org.metadata,
         };
@@ -355,7 +529,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       const sql = `UPDATE neon_auth.organization
                    SET ${updateFields.join(", ")}
                    WHERE id = $${++paramCount}
-                   RETURNING id, name, slug, logo, "createdAt", metadata`;
+                   RETURNING id, name, slug, logo, logo_key, "createdAt", metadata`;
 
       try {
         const result = await pool.query(sql, paramsList);
@@ -370,7 +544,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
           id: updated.id,
           name: updated.name,
           slug: updated.slug,
-          logo: updated.logo,
+          logo: mapOrganizationLogo(updated),
           createdAt: updated.createdAt,
           metadata: updated.metadata,
         };
@@ -429,7 +603,7 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
 
       // Check if organization exists and user is a member
       const checkResult = await pool.query(
-        `SELECT o.id 
+        `SELECT o.id, o.logo_key
          FROM neon_auth.organization o
          INNER JOIN neon_auth.member m ON o.id = m."organizationId"
          WHERE o.id = $1 AND m."userId" = $2`,
@@ -439,6 +613,11 @@ export const organizationsRouter = new Elysia({ prefix: "/organizations" })
       if (checkResult.rows.length === 0) {
         set.status = 404;
         return { error: "Organization not found" };
+      }
+
+      const row = checkResult.rows[0];
+      if (row.logo_key) {
+        await deleteObjectByKey(row.logo_key);
       }
 
       // Delete organization - members will be cascade deleted

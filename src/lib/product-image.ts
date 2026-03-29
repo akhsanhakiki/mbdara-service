@@ -26,3 +26,26 @@ export async function optimizeProductPhotoToWebp(
     })
     .toBuffer();
 }
+
+/** Shop / organization logo — smaller max dimension than product photos. */
+export const ORGANIZATION_LOGO_MAX_EDGE = 512;
+
+export async function optimizeOrganizationLogoToWebp(
+  input: Buffer
+): Promise<Buffer> {
+  return sharp(input, { animated: false })
+    .rotate()
+    .resize({
+      width: ORGANIZATION_LOGO_MAX_EDGE,
+      height: ORGANIZATION_LOGO_MAX_EDGE,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .webp({
+      quality: 85,
+      alphaQuality: 100,
+      effort: 6,
+      smartSubsample: true,
+    })
+    .toBuffer();
+}

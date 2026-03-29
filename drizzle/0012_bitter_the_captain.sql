@@ -1,0 +1,1 @@
+ALTER TABLE "neon_auth"."organization" ADD COLUMN "logo_key" text;

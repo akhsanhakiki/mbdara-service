@@ -145,7 +145,10 @@ export const organization = neonAuthSchema.table("organization", {
   id: uuid("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
+  /** Legacy: external URL; prefer logo_key + R2 */
   logo: text("logo"),
+  /** R2 object key for shop logo (WebP) */
+  logoKey: text("logo_key"),
   createdAt: timestamp("createdAt", { withTimezone: true }).notNull().defaultNow(),
   metadata: text("metadata"),
 });
