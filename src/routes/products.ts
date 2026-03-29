@@ -6,23 +6,22 @@ import {
   ProductCreate,
   ProductRead,
   ProductUpdate,
-  ProductPhotoUploadUrlBody,
-  ProductPhotoUploadUrlResponse,
+  ProductPhotoUploadBody,
   ProductVariationCreate,
   ProductVariationRead,
   ProductVariationUpdate,
 } from "../types";
 import { getOrganizationIdFromHeaders } from "../utils/auth";
 import {
-  createPresignedProductPhotoUpload,
   deleteObjectByKey,
-  extensionForContentType,
   getMissingR2EnvKeys,
   isKeyForProduct,
   isR2Configured,
   photoUrlFromKey,
   productPhotoKeyPrefix,
+  putProductPhotoWebp,
 } from "../lib/r2";
+import { optimizeProductPhotoToWebp } from "../lib/product-image";
 
 function mapProductToRead(
   product: {
@@ -112,8 +111,7 @@ export const productsRouter = new Elysia({ prefix: "/products" })
     ProductCreate,
     ProductRead,
     ProductUpdate,
-    ProductPhotoUploadUrlBody,
-    ProductPhotoUploadUrlResponse,
+    ProductPhotoUploadBody,
     ProductVariationCreate,
     ProductVariationRead,
     ProductVariationUpdate,
@@ -708,50 +706,66 @@ export const productsRouter = new Elysia({ prefix: "/products" })
         return { error: "Product not found" };
       }
 
-      const contentType = body?.content_type ?? "image/jpeg";
-      const ext = extensionForContentType(contentType);
-      if (!ext) {
+      const raw = Buffer.from(await body.file.arrayBuffer());
+      let webp: Buffer;
+      try {
+        webp = await optimizeProductPhotoToWebp(raw);
+      } catch {
         set.status = 400;
         return {
           error:
-            "Unsupported content_type. Use image/jpeg, image/png, image/webp, or image/gif.",
+            "Could not process image. Use a valid JPEG, PNG, GIF, or WebP file.",
         };
       }
 
-      const photoKey = `${productPhotoKeyPrefix(organizationId, product.id)}/${crypto.randomUUID()}.${ext}`;
-      const signed = await createPresignedProductPhotoUpload(
-        photoKey,
-        contentType
-      );
-      if (!signed) {
-        set.status = 503;
-        return { error: "Could not create upload URL" };
+      const photoKey = `${productPhotoKeyPrefix(organizationId, product.id)}/${crypto.randomUUID()}.webp`;
+
+      if (product.photoKey) {
+        await deleteObjectByKey(product.photoKey);
       }
 
-      return {
-        upload_url: signed.uploadUrl,
-        photo_key: photoKey,
-        photo_url: photoUrlFromKey(photoKey)!,
-        expires_in: signed.expiresIn,
-      };
+      try {
+        await putProductPhotoWebp(photoKey, webp);
+      } catch {
+        set.status = 503;
+        return { error: "Could not store image in object storage" };
+      }
+
+      const [updated] = await db
+        .update(products)
+        .set({ photoKey })
+        .where(
+          and(
+            eq(products.id, params.id),
+            eq(products.organizationId, organizationId)
+          )
+        )
+        .returning();
+
+      const variationsList = await db
+        .select()
+        .from(productVariations)
+        .where(eq(productVariations.productId, updated.id));
+
+      return mapProductToRead(updated, variationsList);
     },
     {
       params: t.Object({
         id: t.Number(),
       }),
-      body: "ProductPhotoUploadUrlBody",
+      body: "ProductPhotoUploadBody",
       response: {
-        200: "ProductPhotoUploadUrlResponse",
+        200: "ProductRead",
         400: t.Object({ error: t.String() }),
         401: t.Object({ error: t.String() }),
         404: t.Object({ error: t.String() }),
         503: t.Object({ error: t.String() }),
       },
       detail: {
-        summary: "Get a presigned URL to upload a product photo to R2",
+        summary: "Upload product photo (resized WebP)",
         tags: ["products"],
         description:
-          "Returns a presigned PUT URL. Upload the file with the same Content-Type as requested, then PATCH the product with { photo_key } to attach it.",
+          "multipart/form-data with field `file`. Image is resized (max edge 1600px), optimized, converted to WebP, stored in R2, and linked to the product. Replaces any existing photo.",
         security: [{ bearerAuth: [] }],
       },
     }
