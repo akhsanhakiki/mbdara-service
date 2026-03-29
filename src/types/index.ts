@@ -1,5 +1,38 @@
 import { t } from "elysia";
 
+// Product variation schemas
+export const ProductVariationCreate = t.Object({
+  name: t.Optional(t.String()),
+  description: t.Optional(t.String()),
+  price: t.Number(),
+  cogs: t.Number(),
+  stock: t.Optional(t.Number({ default: 0 })),
+  bundle_quantity: t.Optional(t.Number({ minimum: 1 })),
+  bundle_price: t.Optional(t.Number({ minimum: 0 })),
+});
+
+export const ProductVariationRead = t.Object({
+  id: t.Number(),
+  product_id: t.Number(),
+  name: t.Nullable(t.String()),
+  description: t.Nullable(t.String()),
+  price: t.Number(),
+  cogs: t.Number(),
+  stock: t.Number(),
+  bundle_quantity: t.Nullable(t.Number()),
+  bundle_price: t.Nullable(t.Number()),
+});
+
+export const ProductVariationUpdate = t.Object({
+  name: t.Optional(t.String()),
+  description: t.Optional(t.String()),
+  price: t.Optional(t.Number()),
+  cogs: t.Optional(t.Number()),
+  stock: t.Optional(t.Number()),
+  bundle_quantity: t.Optional(t.Number({ minimum: 1 })),
+  bundle_price: t.Optional(t.Number({ minimum: 0 })),
+});
+
 // Product schemas
 export const ProductCreate = t.Object({
   name: t.String(),
@@ -9,6 +42,7 @@ export const ProductCreate = t.Object({
   stock: t.Optional(t.Number({ default: 0 })),
   bundle_quantity: t.Optional(t.Number({ minimum: 1 })),
   bundle_price: t.Optional(t.Number({ minimum: 0 })),
+  variations: t.Optional(t.Array(ProductVariationCreate)),
 });
 
 export const ProductRead = t.Object({
@@ -21,6 +55,9 @@ export const ProductRead = t.Object({
   bundle_quantity: t.Nullable(t.Number()),
   bundle_price: t.Nullable(t.Number()),
   organization_id: t.Nullable(t.String()),
+  /** Public URL for product image when photo_key is set */
+  photo_url: t.Nullable(t.String()),
+  variations: t.Array(ProductVariationRead),
 });
 
 export const ProductUpdate = t.Object({
@@ -31,11 +68,25 @@ export const ProductUpdate = t.Object({
   stock: t.Optional(t.Number()),
   bundle_quantity: t.Optional(t.Number({ minimum: 1 })),
   bundle_price: t.Optional(t.Number({ minimum: 0 })),
+  /** R2 key from upload-url response; null clears the photo */
+  photo_key: t.Optional(t.Nullable(t.String())),
+});
+
+export const ProductPhotoUploadUrlBody = t.Object({
+  content_type: t.Optional(t.String()),
+});
+
+export const ProductPhotoUploadUrlResponse = t.Object({
+  upload_url: t.String(),
+  photo_key: t.String(),
+  photo_url: t.String(),
+  expires_in: t.Number(),
 });
 
 // TransactionItem schemas
 export const TransactionItemCreate = t.Object({
   product_id: t.Number(),
+  product_variation_id: t.Optional(t.Number()),
   quantity: t.Number(),
 });
 
@@ -44,8 +95,11 @@ export const TransactionItemRead = t.Object({
   quantity: t.Number(),
   price: t.Number(),
   product_id: t.Number(),
+  product_variation_id: t.Nullable(t.Number()),
   transaction_id: t.Nullable(t.Number()),
   product_name: t.String(),
+  variation_name: t.Nullable(t.String()),
+  variation_description: t.Nullable(t.String()),
 });
 
 // Transaction schemas
