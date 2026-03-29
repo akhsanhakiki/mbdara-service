@@ -219,7 +219,6 @@ export const UserRoleUpdate = t.Object({
 // Organization schemas
 export const OrganizationCreate = t.Object({
   name: t.String(),
-  logo: t.Optional(t.String()),
   metadata: t.Optional(t.String()),
 });
 
@@ -227,6 +226,7 @@ export const OrganizationRead = t.Object({
   id: t.String(),
   name: t.String(),
   slug: t.String(),
+  /** Public URL: R2 (logo_key) or legacy stored URL */
   logo: t.Nullable(t.String()),
   createdAt: t.Date(),
   metadata: t.Nullable(t.String()),
@@ -234,8 +234,12 @@ export const OrganizationRead = t.Object({
 
 export const OrganizationUpdate = t.Object({
   name: t.Optional(t.String()),
-  logo: t.Optional(t.String()),
   metadata: t.Optional(t.String()),
+});
+
+/** Same as product photo upload: multipart field `file` */
+export const OrganizationLogoUploadBody = t.Object({
+  file: t.File({ type: "image", maxSize: "20m" }),
 });
 
 // Member schemas

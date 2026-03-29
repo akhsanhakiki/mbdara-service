@@ -61,6 +61,19 @@ export function isKeyForProduct(
   return key === prefix || key.startsWith(`${prefix}/`);
 }
 
+/** R2 keys for organization (shop) logo: org/{orgId}/logo/{uuid}.webp */
+export function organizationLogoKeyPrefix(organizationId: string): string {
+  return `org/${organizationId}/logo`;
+}
+
+export function isKeyForOrganizationLogo(
+  key: string,
+  organizationId: string
+): boolean {
+  const prefix = organizationLogoKeyPrefix(organizationId);
+  return key === prefix || key.startsWith(`${prefix}/`);
+}
+
 export async function deleteObjectByKey(key: string): Promise<void> {
   const bucket = process.env.R2_BUCKET_NAME;
   const client = getClient();
@@ -76,6 +89,11 @@ export async function putProductPhotoWebp(
   key: string,
   body: Buffer
 ): Promise<void> {
+  await putWebpObject(key, body);
+}
+
+/** Same storage as product photos; used for organization logos. */
+export async function putWebpObject(key: string, body: Buffer): Promise<void> {
   const bucket = process.env.R2_BUCKET_NAME;
   const client = getClient();
   if (!bucket || !client) {
